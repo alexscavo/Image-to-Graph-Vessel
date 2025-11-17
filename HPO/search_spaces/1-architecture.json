@@ -1,0 +1,36 @@
+{
+    "MODEL.ENCODER.HIDDEN_DIM": [
+        256,
+        384,
+        512
+    ],
+    "MODEL.DECODER.HIDDEN_DIM": [
+        "=MODEL.ENCODER.HIDDEN_DIM"
+    ],
+    "MODEL.DECODER.DIM_FEEDFORWARD": [
+        512,
+        1024,
+        2048
+    ],
+    "MODEL.DECODER.NHEADS": [
+        "divisors(MODEL.DECODER.HIDDEN_DIM, [4, 8])"
+    ],
+    "MODEL.DECODER.ENC_LAYERS": [
+        2,
+        3,
+        4
+    ],
+    "MODEL.DECODER.DEC_LAYERS": [
+        2,
+        3,
+        4
+    ],
+    "MODEL.DECODER.DROPOUT": [
+        0.0,
+        0.1
+    ],
+    "MODEL.ENCODER.NUM_FEATURE_LEVELS": [
+        3,
+        4
+    ]
+}
