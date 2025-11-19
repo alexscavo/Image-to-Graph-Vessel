@@ -119,7 +119,7 @@ class RelationFormer(nn.Module):
                 pos.append(pos_l)
                 
         # DEBUG
-        print("srcs[0] shape:", srcs[0].shape)
+        # print("srcs[0] shape:", srcs[0].shape)
 
         query_embeds = None
         if not self.two_stage:

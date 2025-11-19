@@ -372,17 +372,17 @@ if __name__ == '__main__':
     ########################################
     
     # --- PRE-TRAINING --- 
-    args = parser.parse_args(['--exp_name', 'pretraining_mixed_real_1',
-                              '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_real.yaml',
-                             ])
+    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_real_1',
+    #                           '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_real.yaml',
+    #                          ])
     
     
     # --- FINE TUNING ---
-    # args = parser.parse_args(['--exp_name', 'PROVA',
-    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
-    #                         '--resume', '/data/scavone/cross-dim_i2g/trained_weights/runs/pretraining_mixed_real1_10/models/checkpoint_epoch=50.pt',
-    #                         '--no_strict_loading'
-    #                         ])
+    args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
+                            '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
+                            '--resume', '/data/scavone/cross-dim_i2g/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+                            '--no_strict_loading'
+                            ])
 
     import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy('file_system')
