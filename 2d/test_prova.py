@@ -170,7 +170,7 @@ def test(args):
     print('fold size:', fold_size)
     
     out_dir = os.path.join(
-        "/data/scavone/cross-dim_i2g/visual di prova",
+        "/data/scavone/cross-dim_i2g_2d/visual di prova",
         "test_vis",
         args.exp_name
     )
@@ -389,7 +389,7 @@ def test(args):
 if __name__ == '__main__':
     args = parser.parse_args(['--exp_name', 'PROVA',
                               '--config', 'configs/prova.yaml',
-                              '--checkpoint', '/data/scavone/cross-dim_i2g/trained_weights/runs/PROVA_10/models/checkpoint_epoch=1000.pt',
+                              '--checkpoint', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/PROVA_10/models/checkpoint_epoch=1000.pt',
                               '--no_strict_loading',
-                              '--out_path', '/data/scavone/cross-dim_i2g/test_results'])
+                              '--out_path', '/data/scavone/cross-dim_i2g_2d/test_results'])
     test(args)

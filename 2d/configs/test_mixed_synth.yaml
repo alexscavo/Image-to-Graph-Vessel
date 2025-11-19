@@ -86,7 +86,7 @@ TRAIN:
   DOMAIN_WEIGHTING: [0.05, 0.95]
   
 
-  SAVE_PATH: "/data/scavone/cross-dim_i2g/trained_weights" # save path for the checkpoint, log and val results
+  SAVE_PATH: "/data/scavone/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
   VAL_INTERVAL: 10 # validation interval
   SAVE_VAL: False # save validation data
   RECOVER_OPTIMIZER_STATE: False

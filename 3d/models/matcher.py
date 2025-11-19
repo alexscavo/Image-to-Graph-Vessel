@@ -5,7 +5,7 @@ Modules to compute the matching cost and solve the corresponding LSAP.
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
-#from lpmp_py import GraphMatchingModule
+# from lpmp_py import GraphMatchingModule
 import pdb
 import sys
 import os

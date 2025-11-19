@@ -363,7 +363,7 @@ if __name__ == '__main__':
     # --- FINE TUNING ---
     # args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_short',
     #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
-    #                         '--resume', '/data/scavone/cross-dim_i2g/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
+    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
     #                         '--no_strict_loading'
     #                         ])
     
@@ -380,7 +380,7 @@ if __name__ == '__main__':
     # --- FINE TUNING ---
     args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
                             '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
-                            '--resume', '/data/scavone/cross-dim_i2g/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+                            '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
                             '--no_strict_loading'
                             ])
 

@@ -5,7 +5,7 @@ DATA:
   DATA_PATH: ""   # octa-synth-packed
   SOURCE_DATA_PATH: "/data/scavone/20cities/patches" # Path to dataset, could be overwritten by command line argument
   NUM_SOURCE_SAMPLES: -1
-  NUM_TARGET_SAMPLES: 2000
+  NUM_TARGET_SAMPLES: 2200
   TARGET_DATA_PATH: "/data/scavone/octa500/patches"
   COMPUTE_TARGET_GRAPH_LOSS: True
   TEST_DATA_PATH: "/data/scavone/octa500/patches/test"
@@ -86,7 +86,7 @@ TRAIN:
   DOMAIN_WEIGHTING: [0.05, 0.95]
   
 
-  SAVE_PATH: "/data/scavone/cross-dim_i2g/trained_weights" # save path for the checkpoint, log and val results
+  SAVE_PATH: "/data/scavone/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
   VAL_INTERVAL: 10 # validation interval
   SAVE_VAL: False # save validation data
   RECOVER_OPTIMIZER_STATE: False

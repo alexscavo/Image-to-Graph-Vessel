@@ -61,7 +61,7 @@ MODEL:
         DUMMY_TOKEN: 0
         RLN_ATTN: True
     MATCHER:
-        NAME: "Hungarian"
+        NAME: "Hungarian"   # Graph matcher is not available
         # matching cost
         C_CLASS: 2
         C_NODE: 5

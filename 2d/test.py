@@ -158,7 +158,7 @@ def test(args):
     print(fold_size)
     
     out_dir = os.path.join(
-        f"/data/scavone/cross-dim_i2g/visual di prova/{args.exp_name}",
+        f"/data/scavone/cross-dim_i2g_2d/visual di prova/{args.exp_name}",
         "test_vis"
     )
     os.makedirs(out_dir, exist_ok=True)
@@ -373,10 +373,10 @@ def test(args):
 
 
 if __name__ == '__main__':
-    # args = parser.parse_args(['--exp_name', 'test_finetuning_mix_synth_real',
-    #                           '--config', 'configs/test_mixed_real.yaml',
-    #                           '--checkpoint', '/data/scavone/cross-dim_i2g/trained_weights/runs/finetune_mixed_synth1_10/models/checkpoint_epoch=100.pt',
-    #                           '--no_strict_loading',
-    #                           '--out_path', '/data/scavone/cross-dim_i2g/test_results',
-    #                           '--display_prob', '0.0'])
+    args = parser.parse_args(['--exp_name', 'test_finetuning_mix_real_1',
+                              '--config', '2d/configs/test_mixed_real.yaml',
+                              '--checkpoint', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_real_1_10/models/checkpoint_epoch=100.pt',
+                              '--no_strict_loading',
+                              '--out_path', '/data/scavone/cross-dim_i2g_2d/test_results',
+                              '--display_prob', '0.0018'])
     test(args)

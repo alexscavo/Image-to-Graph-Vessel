@@ -2,7 +2,7 @@ import os
 import pyvista
 import open3d as o3d
 import numpy as np
-import open3d.visualization.gui as gui
+from open3d.visualization import gui
 from boxes import box_ops
 import torch
 import pdb

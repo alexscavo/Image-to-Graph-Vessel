@@ -381,7 +381,7 @@ if __name__ == "__main__":
     # args = parser.parse_args([
     #     '--hpo_type', 'architecture',
     #     '--base_config', '/home/scavone/cross-dim_i2g/2d/configs/HPO/1-architecture.yaml',
-    #     '--out_dir', '/data/scavone/cross-dim_i2g/HPO',
+    #     '--out_dir', '/data/scavone/cross-dim_i2g_2d/HPO',
     #     '--trials', '30',
     #     '--force_epochs', '20', '--force_val_interval', '1',
     #     '--runner_cmd', 'python /home/scavone/cross-dim_i2g/2d/train_copy.py --config {config_path} --exp_name HPO_0',
@@ -393,7 +393,7 @@ if __name__ == "__main__":
     args = parser.parse_args([
         '--hpo_type', 'pretraining',
         '--base_config', '/home/scavone/cross-dim_i2g/2d/configs/HPO/2-pretraining.yaml',
-        '--out_dir', '/data/scavone/cross-dim_i2g/HPO_pretraining',
+        '--out_dir', '/data/scavone/cross-dim_i2g_2d/HPO_pretraining',
         '--space_json', '/home/scavone/cross-dim_i2g/2d/HPO/search_spaces/2-pretraining.json',
         '--trials', '30',
         '--force_epochs', '20', '--force_val_interval', '1',
