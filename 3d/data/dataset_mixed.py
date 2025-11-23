@@ -11,7 +11,7 @@ def build_mixed_data(config, mode='split', split=0.95, use_grayscale=False, debu
     Args:
         data_dir (str, optional): [description]. Defaults to ''.
         mode (str, optional): [description]. Defaults to 'train'.
-        split (float, optional): [description]. Defaults to 0.8.
+    
 
     Returns:
         [type]: [description]

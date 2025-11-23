@@ -1,9 +1,13 @@
 DATA:
     DIM: 3 # data dimension
-    BATCH_SIZE: 48 # Batch size for a single GPU, could be overwritten by command line argument
-    DATA_PATH: "data/vessel_data/train_data"
-    TEST_DATA_PATH: "data/vessel_data/test_data"
-    DATASET: "synth_3d" # Dataset name
+    BATCH_SIZE: 32 # 48 Batch size for a single GPU, could be overwritten by command line argument
+    DATA_PATH: ""
+    SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
+    TARGET_DATA_PATH: "/data/scavone/syntheticMRI/patches"
+    NUM_SOURCE_SAMPLES: -1  # all
+    NUM_TARGET_SAMPLES: 5000 # train + validation
+    TEST_DATA_PATH: "/data/scavone/syntheticMRI/patches"
+    DATASET: "mixed_synth_3d" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
     PAD_SIZE: [5, 5, 5]
     GROWTH_RANGE: [5, 10]
@@ -71,7 +75,8 @@ TRAIN:
     EPOCHS: 100
     WARMUP_EPOCHS: 1
     WEIGHT_DECAY: 0.0001
-    BASE_LR: 0.0001
+    BASE_LR: 0.00007 # 0.0001
+    DOMAIN_LR: 0.00007
     WARMUP_LR: 0.000000001
     MIN_LR: 5e-6
     CLIP_GRAD: 5.0 # Clip gradient norm
@@ -79,6 +84,10 @@ TRAIN:
     USE_CHECKPOINT: False # could be overwritten by command line argument
     TRAIN_ENCODER: True
     TRAIN_DECODER: True
+
+    # EDGE_SAMPLING_MODE
+    EDGE_SAMPLING_MODE: "up"
+    UPSAMPLE_TARGET_DOMAIN: False
 
     # LR scheduler
     LR_SCHEDULER.NAME: "cosine"
@@ -90,7 +99,7 @@ TRAIN:
     OPTIMIZER.EPS: 1e-8 # Optimizer Epsilon
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
-    SAVE_PATH: "./trained_weights/" # save path for the checkpoint, log and val results
+    SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
     VAL_INTERVAL: 10 # validation interval
     SAVE_VAL: False # save validation data
 
@@ -101,10 +110,10 @@ TRAIN:
     EDGE_SAMPLE_RATIO: 0.1
     EDGE_SAMPLE_RATIO_INTERVAL: 0.025
     W_BBOX: 3.0
-    W_CLASS: 3.0
-    W_CARD: 1.0
+    W_CLASS: 4 # 3.0
+    W_CARD: 0.8 # 1.0
     W_NODE: 2.0
-    W_EDGE: 4.0
+    W_EDGE: 6 # 4.0
 
 log:
     exp_name: "repl_new-repo"

@@ -1,5 +1,7 @@
 from functools import partial
 import os
+from pathlib import Path
+import sys
 import yaml
 import json
 from argparse import ArgumentParser
@@ -21,35 +23,6 @@ import ignite.distributed as igdist
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
 from torch.utils.tensorboard import SummaryWriter
 from monai.data import DataLoader
-
-parser = ArgumentParser()
-parser.add_argument('--config',
-                    default=None,
-                    help='config file (.yml) containing the hyper-parameters for training. '
-                         'If None, use the nnU-Net config. See /config for examples.')
-parser.add_argument('--resume', default=None, help='checkpoint of the last epoch of the model')
-parser.add_argument('--restore_state', dest='restore_state', help='whether the state should be restored', action='store_true')
-parser.add_argument('--device', default='cuda',
-                        help='device to use for training')
-parser.add_argument('--cuda_visible_device', nargs='*', type=int, default=[0,1],
-                        help='list of index where skip conn will be made')
-parser.add_argument("--local_rank", default=0, type=int)
-parser.add_argument("--nproc_per_node", default=None, type=int)
-parser.add_argument('--debug', dest='debug', help='do fast debug', action='store_true')  #TODO: remove
-parser.add_argument('--exp_name', dest='exp_name', help='name of the experiment', type=str,required=True)
-parser.add_argument('--pre2d', dest='pre2d', help='Pretraining the network using 2D-segmentation after backbone', action="store_true")
-parser.add_argument('--use_retina', dest='use_retina', help='Use synthetic retina data instead of street data for pretraining', action="store_true")
-parser.add_argument('--continuous', dest='continuous', help='Using continuous rotation for gaussian augment', action="store_true")
-parser.add_argument("--parallel", dest='parallel', help='Using distributed training', action="store_true")
-parser.add_argument("--ignore_backbone",  dest='ignore_backbone', help='', action="store_true")
-parser.add_argument('--seg', dest='seg', help='Using segmentation or raw images', action="store_true")
-parser.add_argument('--general_transformer', dest='general_transformer', help='Using a general transformer with an adapter', action="store_true")
-parser.add_argument('--pretrain_general', dest='pretrain_general', help='Pretraining the general transformer with 2D data', action="store_true")
-parser.add_argument('--load_only_decoder', dest='load_only_decoder', help='When resuming, only load state from decoder instead of whole model. Useful when doing multi-modal transfer learning', action="store_true")
-parser.add_argument('--no_strict_loading', default=False, action="store_true",
-                    help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
-parser.add_argument('--sspt', default=False, action="store_true",
-                    help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
 
 
 
@@ -99,6 +72,26 @@ def main(rank=0, args=None):
         # Thus each node will download a copy of the dataset
         igdist.barrier()
 
+    if config.DATA.SOURCE_DATA_PATH:
+        source_path = Path(config.DATA.SOURCE_DATA_PATH)
+        val_source = source_path / "val"
+        source_has_val = val_source.exists()
+        print('Source has val?', source_has_val)
+    else:
+        raise ValueError("SOURCE_DATA_PATH is not defined.")
+    
+    if config.DATA.TARGET_DATA_PATH:
+        target_path = Path(config.DATA.TARGET_DATA_PATH)
+        val_target = target_path / "val"
+        target_has_val = val_target.exists()
+        print('Target has val?', target_has_val)
+    else:
+        raise ValueError("TARGET_DATA_PATH is not defined.")
+    
+    if not source_has_val or not target_has_val:
+        raise ValueError("source or target doesn't have the validation set. Please create it")
+    
+
     if config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_real_vessels" or config.DATA.DATASET == "mixed_real_vessels_octa" or config.DATA.DATASET == "mixed_synth_3d_octa":
         dataset_func = partial(build_mixed_data, upsample_target_domain=config.TRAIN.UPSAMPLE_TARGET_DOMAIN)
             
@@ -108,14 +101,12 @@ def main(rank=0, args=None):
             debug=args.debug,
             rotate=True,
             continuous=args.continuous,
-            split=0.8
         )
         config.DATA.MIXED = True
     elif config.DATA.DATASET == "road_dataset":
         train_ds, val_ds, sampler = build_road_network_data(
             config, 
             mode='split', 
-            split=0.8, 
             debug=args.debug, 
             max_samples=config.DATA.NUM_SOURCE_SAMPLES, 
             domain_classification=-1, 
@@ -128,7 +119,6 @@ def main(rank=0, args=None):
         train_ds, val_ds, sampler = build_octa_network_data(
             config, 
             mode='split', 
-            split=0.8, 
             debug=args.debug, 
             max_samples=config.DATA.NUM_SOURCE_SAMPLES, 
             domain_classification=-1, 
@@ -144,7 +134,6 @@ def main(rank=0, args=None):
             mode='split', 
             debug=args.debug, 
             max_samples=config.DATA.NUM_SOURCE_SAMPLES, 
-            split=0.8
         )
 
     if args.parallel and igdist.get_local_rank() == 0:
@@ -238,6 +227,7 @@ def main(rank=0, args=None):
     optimizer = torch.optim.AdamW(
         param_dicts, lr=float(config.TRAIN.BASE_LR), weight_decay=float(config.TRAIN.WEIGHT_DECAY)
     )
+    
 
     if args.distributed:
         optimizer = igdist.auto_optim(optimizer)
@@ -330,7 +320,49 @@ def match_name_keywords(n, name_keywords):
 
 
 if __name__ == '__main__':
-    args = parser.parse_args()
+    
+    parser = ArgumentParser()
+    parser.add_argument('--config',
+                        default=None,
+                        help='config file (.yml) containing the hyper-parameters for training. '
+                            'If None, use the nnU-Net config. See /config for examples.')
+    parser.add_argument('--resume', default=None, help='checkpoint of the last epoch of the model')
+    parser.add_argument('--restore_state', dest='restore_state', help='whether the state should be restored', action='store_true')
+    parser.add_argument('--device', default='cuda',
+                            help='device to use for training')
+    parser.add_argument('--cuda_visible_device', nargs='*', type=int, default=[0,1],
+                            help='list of index where skip conn will be made')
+    parser.add_argument("--local_rank", default=0, type=int)
+    parser.add_argument("--nproc_per_node", default=None, type=int)
+    parser.add_argument('--debug', dest='debug', help='do fast debug', action='store_true')  #TODO: remove
+    parser.add_argument('--exp_name', dest='exp_name', help='name of the experiment', type=str,required=True)
+    parser.add_argument('--pre2d', dest='pre2d', help='Pretraining the network using 2D-segmentation after backbone', action="store_true")
+    parser.add_argument('--use_retina', dest='use_retina', help='Use synthetic retina data instead of street data for pretraining', action="store_true")
+    parser.add_argument('--continuous', dest='continuous', help='Using continuous rotation for gaussian augment', action="store_true")
+    parser.add_argument("--parallel", dest='parallel', help='Using distributed training', action="store_true")
+    parser.add_argument("--ignore_backbone",  dest='ignore_backbone', help='', action="store_true")
+    parser.add_argument('--seg', dest='seg', help='Using segmentation or raw images', action="store_true")
+    parser.add_argument('--general_transformer', dest='general_transformer', help='Using a general transformer with an adapter', action="store_true")
+    parser.add_argument('--pretrain_general', dest='pretrain_general', help='Pretraining the general transformer with 2D data', action="store_true")
+    parser.add_argument('--load_only_decoder', dest='load_only_decoder', help='When resuming, only load state from decoder instead of whole model. Useful when doing multi-modal transfer learning', action="store_true")
+    parser.add_argument('--no_strict_loading', default=False, action="store_true",
+                        help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
+    parser.add_argument('--sspt', default=False, action="store_true",
+                        help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
+
+
+
+
+    ########################################
+    ###########  syntheticMRI  #############
+    ########################################
+
+    # --- PRE-TRAINING ---
+    args = parser.parse_args([
+        '--exp_name', 'pretraining_mixed_synth3d',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        '--continuous'
+    ])
 
     if args.parallel:
         with igdist.Parallel(backend='nccl', nproc_per_node=args.nproc_per_node) as parallel:

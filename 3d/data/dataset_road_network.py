@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+from pprint import pprint
+import sys
 import numpy as np
 import random
 from medpy.io import load
@@ -211,7 +214,7 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
     """
     if mode == 'train':
         img_folder = os.path.join(config.DATA.DATA_PATH, 'raw')
-        seg_folder = os.path.join(config.DATA.DATA_PATH, 'seg')
+        seg_folder = os.path.join(config.DATA.DATA_PATH, 'raw')
         vtk_folder = os.path.join(config.DATA.DATA_PATH, 'vtp')
         img_files = []
         vtk_files = []
@@ -224,7 +227,8 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
             seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
 
         data_dicts = [
-            {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
+            {"img": img_file, "vtp": vtk_file, "seg": seg_file} 
+            for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
         ]
         ds = Sat2GraphDataLoader(
             data=data_dicts,
@@ -238,23 +242,40 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
             growth_range=config.DATA.GROWTH_RANGE
         )
         return ds
+    
     elif mode == 'test':
         img_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
-        seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'seg')
+        seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
         vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'vtp')
         img_files = []
         vtk_files = []
         seg_files = []
 
         for file_ in os.listdir(img_folder):
-            file_ = file_[:-8]
-            img_files.append(os.path.join(img_folder, file_+'data.png'))
-            vtk_files.append(os.path.join(vtk_folder, file_+'graph.vtp'))
-            seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
+            if "rgb" in file_ or "sat" in file_:
+                continue
+            
+            base_name, ext = os.path.splitext(file_)
+            base_name_region = base_name[:-3]
+            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
+            
+            img_files.append(os.path.join(img_folder, 'region_' + region_number + '_' + patch_number +'_sat.png'))
+            seg_files.append(os.path.join(seg_folder, base_name + '.png'))
 
+            # Check for both .vtp and .pickle files
+            vtp_path = os.path.join(vtk_folder, 'region_' + region_number + '_' + patch_number + 'gt_graph.vtp')
+            pickle_path = os.path.join(vtk_folder, 'region_' + region_number + '_' + patch_number + '_gt_graph.pickle')
+            vtk_files.append(vtp_path)
+            
+            
         data_dicts = [
-            {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
+            {"img": img_file, "vtp": vtk_file, "seg": seg_file} 
+            for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
         ]
+        
+        if max_samples > 0:
+            data_dicts = data_dicts[:max_samples]
+            
         ds = Sat2GraphDataLoader(
             data=data_dicts,
             transform=val_transform,
@@ -267,35 +288,99 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
             growth_range=config.DATA.GROWTH_RANGE
         )
         return ds
+    
     elif mode == 'split':
-        img_folder = os.path.join(config.DATA.DATA_PATH, 'raw')
-        seg_folder = os.path.join(config.DATA.DATA_PATH, 'seg')
-        vtk_folder = os.path.join(config.DATA.DATA_PATH, 'vtp')
-        img_files = []
-        vtk_files = []
-        seg_files = []
+        
+        data_root = Path(config.DATA.SOURCE_DATA_PATH)
+        
+        # ---- TRAIN FOLDERS ----
+        
+        train_root = data_root / "train"
+        
+        img_folder_train = train_root / 'raw'
+        seg_folder_train = train_root / 'raw'
+        vtk_folder_train = train_root / 'vtp'
+        
+        img_files_train = []
+        vtk_files_train = []
+        seg_files_train = []
 
-        for file_ in os.listdir(img_folder):
-            file_ = file_[:-8]
-            img_files.append(os.path.join(img_folder, file_+'data.png'))
-            vtk_files.append(os.path.join(vtk_folder, file_+'graph.vtp'))
-            seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
+        for file_ in os.listdir(img_files_train):
+            
+            if "rgb" in file_ or "sat" in file_:
+                continue
+            
+            base_name, ext = os.path.splitext(file_)
+            base_name_region = base_name[:-3]
+            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
+            
+            img_files_train.append(str(img_folder_train / f"region_{region_number}_{patch_number}_sat.png"))
+            seg_files_train.append(str(seg_folder_train / f"{base_name}.png"))
+            
+            vtp_path = str(vtk_folder_train / f"{base_name}_graph.vtp")
+            pickle_path = str(vtk_folder_train / f"{base_name}_graph.pickle")
+            
+            vtk_files_train.append(vtp_path)   
+            
+        print(vtk_files_train[:5])
+        sys.exit()
+        
 
-        data_dicts = [
-            {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
+        data_dicts_train = [
+            {"img": img_file_train, "vtp": vtk_file_train, "seg": seg_file_train} 
+            for img_file_train, vtk_file_train, seg_file_train in zip(img_files_train, vtk_files_train, seg_files_train)
         ]
-        random.seed(config.DATA.SEED)
-        random.shuffle(data_dicts)
-        train_split = int(split*len(data_dicts))
-        train_files, val_files = data_dicts[:
-                                            train_split], data_dicts[train_split:]
+        
+        print(f"---- Number of 20cities data_dicts_train: {len(data_dicts_train)}")
+        print("---- Data Dicts:")
+        pprint(data_dicts_train[:2])
+        
+        # ---- VALIDATION FOLDERS ----
+        
+        val_root = data_root / "val"
+        
+        img_folder_val = val_root / 'raw'
+        seg_folder_val = val_root / 'raw'
+        vtk_folder_val = val_root / 'vtp'
+        
+        img_files_val = []
+        vtk_files_val = []
+        seg_files_val = []
 
-        if debug:
-            train_files = train_files[:128]
-            val_files = train_files[:32]
-        elif max_samples > 0:
+        for file_ in os.listdir(img_files_val):
+            
+            if "rgb" in file_ or "sat" in file_:
+                continue
+            
+            base_name, ext = os.path.splitext(file_)
+            base_name_region = base_name[:-3]
+            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
+            
+            img_files_val.append(str(img_folder_val / f"region_{region_number}_{patch_number}_sat.png"))
+            seg_files_val.append(str(seg_folder_val / f"{base_name}.png"))
+            
+            vtp_path = str(vtk_folder_val / f"{base_name}_graph_gt.vtp")
+            pickle_path = str(vtk_folder_val / f"{base_name}_graph.pickle")
+            
+            vtk_files_val.append(vtp_path)   
+            
+
+        data_dicts_val = [
+            {"img": img_file_val, "vtp": vtk_file_val, "seg": seg_file_val} 
+            for img_file_val, vtk_file_val, seg_file_val in zip(img_files_val, vtk_files_val, seg_files_val)
+        ]
+        
+        print(f"---- Number of 20cities data_dicts_val: {len(data_dicts_val)}")
+        print("---- Data Dicts:")
+        pprint(data_dicts_val[:2])
+        
+        train_files = data_dicts_train
+        val_files   = data_dicts_val
+        
+        if max_samples > 0:
             train_files = train_files[:max_samples]
-            val_files = val_files[:min(round(max_samples*(1-split)), config.DATA.BATCH_SIZE * 10)]
+            val_files = val_files[:round(max_samples * (1 - split))]
+
 
         train_ds = Sat2GraphDataLoader(
             data=train_files,

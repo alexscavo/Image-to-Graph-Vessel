@@ -1,0 +1,12 @@
+setup.py
+/home/scavone/cross-dim_i2g/3d/models/ops/src/vision.cpp
+/home/scavone/cross-dim_i2g/3d/models/ops/src/cpu/ms_deform_attn_cpu.cpp
+/home/scavone/cross-dim_i2g/3d/models/ops/src/cuda/ms_deform_attn_cuda.cu
+MultiScaleDeformableAttention3D.egg-info/PKG-INFO
+MultiScaleDeformableAttention3D.egg-info/SOURCES.txt
+MultiScaleDeformableAttention3D.egg-info/dependency_links.txt
+MultiScaleDeformableAttention3D.egg-info/top_level.txt
+functions/__init__.py
+functions/ms_deform_attn_func.py
+modules/__init__.py
+modules/ms_deform_attn.py

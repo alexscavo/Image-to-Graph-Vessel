@@ -180,7 +180,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
                                   './models'),
             save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
             save_interval=5,
-            n_saved=5,
+            n_saved=2,
             epoch_level=True,
         ),
         TensorBoardStatsHandler(

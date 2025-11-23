@@ -1,3 +1,5 @@
+import csv
+from pathlib import Path
 import random
 
 import torch
@@ -338,3 +340,43 @@ def Bresenham3D(p1, p2):
             p2 += 2 * dx 
             ListOfPoints.append((x1, y1, z1)) 
     return ListOfPoints
+
+
+def split_reader_nifti(split_path: Path):
+    """
+    Read a splits.csv of the form:
+
+        patient_id,split
+        1,train
+        2,val
+        3,test
+        ...
+
+    and return a dict { "1": "train", "2": "val", ... } where the keys
+    match the NIfTI stem (what id_from_nii() returns).
+    """
+    def _normalize_split(name: str) -> str:
+        name = (name or "").strip().lower()
+        if name in {"val", "valid", "validation", "dev"}:
+            return "val"
+        if name in {"test", "testing"}:
+            return "test"
+        return "train"
+
+    split_map = {}
+    split_path = Path(split_path)
+    if not split_path.exists():
+        print(f"[error] split file not found: {split_path}")
+        return split_map
+
+    with open(split_path, newline="") as f:
+        reader = csv.DictReader(f)
+        if "patient_id" not in reader.fieldnames or "split" not in reader.fieldnames:
+            print("[error] split CSV must have headers: patient_id,split")
+            return split_map
+        for row in reader:
+            pid = row["patient_id"].strip()
+            base = Path(pid).stem       # "1.nii.gz" -> "1"
+            split_map[base] = _normalize_split(row["split"])
+
+    return split_map

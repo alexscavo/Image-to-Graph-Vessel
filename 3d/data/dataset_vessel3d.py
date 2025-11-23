@@ -1,3 +1,5 @@
+from pathlib import Path
+from pprint import pprint
 import torch
 from monai.data import Dataset
 from medpy.io import load
@@ -107,26 +109,34 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
     Returns:
         [type]: [description]
     """
-    path = config.DATA.TEST_DATA_PATH if mode=='test' else config.DATA.DATA_PATH
-    nifti_folder = os.path.join(path, 'raw')
-    seg_folder = os.path.join(path, 'seg')
-    vtk_folder = os.path.join(path, 'vtp')
-    nifti_files = []
-    vtk_files = []
-    seg_files = []
-
-    for i,file_ in enumerate(os.listdir(nifti_folder)):
-        file_ = file_[:-7]
-        nifti_files.append(os.path.join(nifti_folder, file_+'.nii.gz'))
-        vtk_files.append(os.path.join(vtk_folder, file_[:-4]+'graph.vtp'))
-        seg_files.append(os.path.join(seg_folder, file_[:-4]+'seg.nii.gz'))
-        # if i>45000:
-        #     break
-
-    data_dicts = [
-        {"nifti": nifti_file, "vtp": vtk_file, "seg": seg_file} for nifti_file, vtk_file, seg_file in zip(nifti_files, vtk_files, seg_files)
-        ]
+    
+    path = Path(config.DATA.TARGET_DATA_PATH)
+    
     if mode=='train':
+        
+        train_path = path / 'train'
+        
+        nifti_folder = train_path / 'raw'
+        seg_folder = train_path / 'seg'
+        vtk_folder = train_path / 'vtp'
+        nifti_files = []
+        vtk_files = []
+        seg_files = []
+
+        for nifti_path_train in os.listdir(nifti_folder):
+            
+            stem = nifti_path_train.removesuffix("_data.nii.gz")
+            
+            nifti_files.append(str(nifti_folder / nifti_path_train))
+            seg_files.append(str(seg_folder / f"{stem}_seg.nii.gz"))
+            vtk_files.append(str(vtk_folder / f"{stem}_graph.vtp"))
+
+
+        data_dicts = [
+            {"nifti": nifti_file, "vtp": vtk_file, "seg": seg_file} 
+            for nifti_file, vtk_file, seg_file in zip(nifti_files, vtk_files, seg_files)
+            ]
+        
         ds = vessel_loader(
             data=data_dicts,
             transform=train_transform,
@@ -136,9 +146,35 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             augment=False 
         )
         return ds
+    
     elif mode=='test':
+        
+        test_path = path / 'test'
+        
+        nifti_folder = test_path / 'raw'
+        seg_folder = test_path / 'seg'
+        vtk_folder = test_path / 'vtp'
+        nifti_files = []
+        vtk_files = []
+        seg_files = []
+
+        for nifti_path_train in os.listdir(nifti_folder):
+            
+            stem = nifti_path_train.removesuffix("_data.nii.gz")
+            
+            nifti_files.append(str(nifti_folder / nifti_path_train))
+            seg_files.append(str(seg_folder / f"{stem}_seg.nii.gz"))
+            vtk_files.append(str(vtk_folder / f"{stem}_graph.vtp"))
+
+
+        data_dicts = [
+            {"nifti": nifti_file, "vtp": vtk_file, "seg": seg_file} 
+            for nifti_file, vtk_file, seg_file in zip(nifti_files, vtk_files, seg_files)
+            ]
+        
         if max_samples > 0:
             data_dicts = data_dicts[:max_samples]
+            
         ds = vessel_loader(
             data=data_dicts,
             transform=None,
@@ -148,17 +184,73 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             augment=False,
         )
         return ds
+    
     elif mode=='split':
-        random.seed(config.DATA.SEED)
-        random.shuffle(data_dicts)
-        train_split = int(split*len(data_dicts))
-        train_files, val_files = data_dicts[:train_split], data_dicts[train_split:]
-        if debug:
-            train_files = train_files[:128]
-            val_files = val_files[:32]
-        elif max_samples > 0:
+            
+        # ---- TRAIN FOLDERS ----
+        train_path = path / 'train'
+        
+        nifti_folder_train = train_path / 'raw'
+        seg_folder_train = train_path / 'seg'
+        vtk_folder_train = train_path / 'vtp'
+        nifti_files_train = []
+        vtk_files_train = []
+        seg_files_train = []
+
+        for nifti_path_train in os.listdir(nifti_folder_train):
+            
+            stem = nifti_path_train.removesuffix("_data.nii.gz")
+            
+            nifti_files_train.append(str(nifti_folder_train / nifti_path_train))
+            seg_files_train.append(str(seg_folder_train / f"{stem}_seg.nii.gz"))
+            vtk_files_train.append(str(vtk_folder_train / f"{stem}_graph.vtp"))
+
+
+        data_dicts_train = [
+            {"nifti": nifti_file_train, "vtp": vtk_file_train, "seg": seg_file_train} 
+            for nifti_file_train, vtk_file_train, seg_file_train in zip(nifti_files_train, vtk_files_train, seg_files_train)
+            ]
+        
+        print(f"---- Number of syntheticMRI data_dicts_train: {len(data_dicts_train)}")
+        print("---- Data Dicts:")
+        pprint(data_dicts_train[:2])
+        
+        
+        # ---- VAL FOLDERS ----
+        val_path = path / 'val'
+        
+        nifti_folder_val = val_path / 'raw'
+        seg_folder_val = val_path / 'seg'
+        vtk_folder_val = val_path / 'vtp'
+        nifti_files_val = []
+        vtk_files_val = []
+        seg_files_val = []
+
+        for nifti_path_val in os.listdir(nifti_folder_val):
+            
+            stem = nifti_path_val.removesuffix("_data.nii.gz")
+            
+            nifti_files_val.append(str(nifti_folder_val / nifti_path_val))
+            seg_files_val.append(str(seg_folder_val / f"{stem}_seg.nii.gz"))
+            vtk_files_val.append(str(vtk_folder_val / f"{stem}_graph.vtp"))
+
+
+        data_dicts_val = [
+            {"nifti": nifti_file_val, "vtp": vtk_file_val, "seg": seg_file_val} 
+            for nifti_file_val, vtk_file_val, seg_file_val in zip(nifti_files_val, vtk_files_val, seg_files_val)
+            ]
+        
+        print(f"---- Number of syntheticMRI data_dicts_val: {len(data_dicts_val)}")
+        print("---- Data Dicts:")
+        pprint(data_dicts_val[:2])
+        
+        train_files = data_dicts_train
+        val_files   = data_dicts_val
+        
+        if max_samples > 0:
             train_files = train_files[:max_samples]
             val_files = val_files[:round(max_samples*(1-split))]
+            
         train_ds = vessel_loader(
             data=train_files,
             transform=train_transform,
@@ -168,6 +260,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             augment=False,
             domain_classification=domain_classification
         )
+        
         val_ds = vessel_loader(
             data=val_files,
             transform=val_transform,
