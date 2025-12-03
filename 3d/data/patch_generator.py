@@ -119,66 +119,6 @@ class PatchGraphGenerator:
 
         return nx.subgraph(self.G, keep_nodes)
 
-    # def create_patch_graph_centerline(self, patch_size):
-        
-    #     keep_nodes = []
-    #     for node in self.G.nodes():
-    #         keep = True
-    #         position = self.G.nodes[node]["pos"]
-    #         keep = self.check_position(position, patch_size)
-    #         if keep:
-    #             # print('mantenuto! node:\n', node, '-'*50)
-    #             keep_nodes.append(node)
-            
-
-    #     candidate_edges_p1 = self.centerline_df[
-    #         self.centerline_df["node1_col"].isin(keep_nodes)]  # and self.centerline_df["node2_col"] not in keep_nodes
-    #     candidate_edges_p1 = candidate_edges_p1[~candidate_edges_p1["node2_col"].isin(keep_nodes)]
-
-    #     candidate_edges_p2 = self.centerline_df[
-    #         ~self.centerline_df["node1_col"].isin(keep_nodes)]  # and self.centerline_df["node2_col"] not in keep_nodes
-    #     candidate_edges_p2 = candidate_edges_p2[candidate_edges_p2["node2_col"].isin(keep_nodes)]
-
-    #     new_node = []
-    #     con_to = []
-
-    #     for _, row in candidate_edges_p1.iterrows():
-    #         prev_status = None
-    #         prev_position = row["pos_col"][0]
-    #         for cl_pos in row["pos_col"][1:]:
-    #             status = self.check_position(cl_pos, patch_size)
-
-    #             if status == False and prev_status == True:
-    #                 new_node.append(prev_position)
-    #                 con_to.append(row["node1_col"])
-    #                 break
-    #             prev_status = status
-    #             prev_position = cl_pos
-
-    #     for _, row in candidate_edges_p2.iterrows():
-    #         prev_status = None
-    #         li = row["pos_col"].copy()
-    #         li.reverse()
-    #         prev_position = li[0]
-    #         for cl_pos in li[1:]:
-    #             status = self.check_position(cl_pos, patch_size)
-
-    #             if status == False and prev_status == True:
-    #                 new_node.append(prev_position)
-    #                 con_to.append(row["node2_col"])
-    #                 break
-
-    #             prev_status = status
-    #             prev_position = cl_pos
-
-    #     subG = nx.subgraph(self.G.copy(), keep_nodes).copy()
-
-    #     for i, node_pos in enumerate(new_node):
-    #         subG.add_edge(self.max_node_id, con_to[i])
-    #         subG.add_node(self.max_node_id, pos=node_pos)
-    #         self.max_node_id += 1
-
-    #     return subG
     
     def create_patch_graph_centerline(self, patch_size):
         """

@@ -1,4 +1,5 @@
 import enum
+import random
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -6,12 +7,13 @@ from boxes import box_ops, box_ops_2D
 import numpy as np
 from utils.utils import downsample_edges, upsample_edges
 
+debug_check = False
+
 class EDGE_SAMPLING_MODE(enum.Enum):
     NONE = "none"
     UP = "up"
     DOWN = "down"
     RANDOM_UP = "random_up"
-
 
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
@@ -124,6 +126,14 @@ class SetCriterion(nn.Module):
         
         targets = torch.zeros(outputs[...,0].shape, dtype=torch.long).to(outputs.get_device())
         targets[idx] = 1.0
+        
+        # DEBUG
+        if debug_check:
+            with torch.no_grad():
+                num_pos = (targets == 1).sum().item()
+                num_neg = (targets == 0).sum().item()
+                print(f"\n[LOSS_CLASS] num_pos={num_pos}, num_neg={num_neg}")
+        
         loss = F.cross_entropy(outputs.permute(0,2,1), targets, weight=weight, reduction='mean')
         
         # cls_acc = 100 - accuracy(outputs, targets_one_hot)[0]
@@ -153,6 +163,10 @@ class SetCriterion(nn.Module):
         num_nodes = sum(len(t) for t in targets)
         
         idx = self._get_src_permutation_idx(indices)
+        
+        if debug_check:
+            print(f"[LOSS_NODES] num_nodes_gt={num_nodes}, num_matched={idx[0].numel()}") # DEBUG
+        
         pred_nodes = outputs[idx]
         target_nodes = torch.cat([t[i] for t, (_, i) in zip(targets, indices)], dim=0)
         loss = F.l1_loss(pred_nodes, target_nodes, reduction='none') # TODO: check detr for loss function
@@ -216,6 +230,9 @@ class SetCriterion(nn.Module):
         # loop through each of batch to collect the edge and node
         for batch_id, (pos_edge, n) in enumerate(zip(new_target_edges, target_nodes)):
             
+            if debug_check:
+                print(f"[LOSS_EDGES] batch {batch_id}: n_nodes={n.shape[0]}, pos_edges_gt={pos_edge.shape[0]}")     # DEBUG
+            
             # map the predicted object token by the matcher ordering
             rearranged_object_token = object_token[batch_id, indices[batch_id][0],:]
             
@@ -224,6 +241,9 @@ class SetCriterion(nn.Module):
             full_adj[pos_edge[:,0],pos_edge[:,1]]=0
             full_adj[pos_edge[:,1],pos_edge[:,0]]=0
             neg_edges = torch.nonzero(torch.triu(full_adj))
+            
+            if debug_check:
+                print(f"[LOSS_EDGES] batch {batch_id}: neg_edges_before_sampling={neg_edges.shape[0]}")     # DEBUG
             
             # shuffle edges for undirected edge
             shuffle = np.random.randn((pos_edge.shape[0]))>0
@@ -263,6 +283,11 @@ class SetCriterion(nn.Module):
         # torch.tensor(list(itertools.combinations(range(n.shape[0]), 2))).to(e.get_device())
         relation_feature = torch.cat(relation_feature, 0)
         edge_labels = torch.cat(edge_labels, 0).to(h.get_device())
+        
+        if debug_check:
+            num_pos_edges = (edge_labels == 1).sum().item()
+            num_neg_edges = (edge_labels == 0).sum().item()
+            print(f"[LOSS_EDGES] total_pos={num_pos_edges}, total_neg={num_neg_edges}") # DEBUG
 
         relation_pred = self.relation_embed(relation_feature)
 
@@ -282,6 +307,7 @@ class SetCriterion(nn.Module):
 
         loss = F.cross_entropy(relation_pred, edge_labels, reduction='mean')
 
+        # print(f"[LOSS_EDGES_VALUE] {loss.item():.4f}")
 
         return loss
 
@@ -338,6 +364,35 @@ class SetCriterion(nn.Module):
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(out, target)
+        
+        # DEBUG START
+        if debug_check:
+            for b, (src_idx, tgt_idx) in enumerate(indices):
+                n_matched = len(src_idx)
+                n_gt = target['nodes'][b].shape[0]
+                n_pred_total = out['pred_logits'].shape[1]
+                
+                if n_matched == 0:
+                    print(f"⚠️  Batch {b}: ZERO MATCHES! GT has {n_gt} nodes")
+                elif n_matched < n_gt * 0.5:
+                    print(f"⚠️  Batch {b}: Low match rate: {n_matched}/{n_gt} ({100*n_matched/n_gt:.1f}%)")
+                
+                # Check predicted class distribution
+                pred_classes = torch.argmax(out['pred_logits'][b], -1)
+                n_pred_obj = (pred_classes == 1).sum().item()
+                print(f"   Batch {b}: {n_pred_obj}/{n_pred_total} queries classified as objects")
+            
+            print("\n[MATCHER] batch stats")
+            total_pos = 0
+            if random.random() < 0.1:
+                print(f"\n[4. INFERENCE RESULTS]")
+                N = 1  # number of samples you want to inspect
+                for i in range(min(N, len(indices))):
+                    print(f"  sample {b}: matched {len(src_idx)} preds to {len(tgt_idx)} GT nodes")
+                    total_pos += len(src_idx)
+            print(f"  total matched preds in batch: {total_pos}")
+            
+        # DEBUG END
         
         losses = {}
         losses['class'] = self.loss_class(out['pred_logits'], indices)

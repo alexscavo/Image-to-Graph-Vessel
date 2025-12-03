@@ -15,7 +15,7 @@ DATA:
     INTERPOLATION: "bicubic" # Interpolation to resize image (random, bilinear, bicubic)
     PIN_MEMORY: True # Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.
     NUM_WORKERS: 4 # Number of data loading threads
-    SEED: 20 # random seed for reproducibility
+    SEED: 42 # random seed for reproducibility
 
 MODEL:
     # default model parameters
@@ -60,7 +60,7 @@ MODEL:
         DEC_N_POINTS: 4
         ENC_N_POINTS: 4
         TWO_STAGE: False
-        OBJ_TOKEN: 80
+        OBJ_TOKEN: 120
         RLN_TOKEN: 2
         DUMMY_TOKEN: 0
         RLN_ATTN: True
@@ -105,7 +105,7 @@ TRAIN:
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
     SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 5 # validation interval
+    VAL_INTERVAL: 1 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss

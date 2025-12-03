@@ -1,5 +1,6 @@
 from pathlib import Path
 from pprint import pprint
+import sys
 import torch
 from monai.data import Dataset
 from medpy.io import load
@@ -73,7 +74,7 @@ class vessel_loader(Dataset):
 
         coordinates = torch.tensor(np.float32(np.asarray(vtk_data.points)), dtype=torch.float) / self.normalize_nodes
         lines = torch.tensor(np.asarray(vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)[:,1:]
-
+        
         if self.augment:
             # Random Rotation
             alpha = random.randint(0, 3) * 90
@@ -94,9 +95,11 @@ class vessel_loader(Dataset):
 
             # Gaussian Noise
             image_data = train_transform(image_data)
+            
+        # print("coords range:", coordinates.min().item(), coordinates.max().item())
 
         return [image_data], [seg_data], [coordinates], [lines], [None], [self.domain_classification]
-
+    
 
 def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples=0, domain_classification=-1):
     """[summary]
@@ -211,9 +214,9 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             for nifti_file_train, vtk_file_train, seg_file_train in zip(nifti_files_train, vtk_files_train, seg_files_train)
             ]
         
-        print(f"---- Number of syntheticMRI data_dicts_train: {len(data_dicts_train)}")
-        print("---- Data Dicts:")
-        pprint(data_dicts_train[:2])
+        # print(f"---- Number of syntheticMRI data_dicts_train: {len(data_dicts_train)}")
+        # print("---- Data Dicts:")
+        # pprint(data_dicts_train[:2])
         
         
         # ---- VAL FOLDERS ----
@@ -240,9 +243,9 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             for nifti_file_val, vtk_file_val, seg_file_val in zip(nifti_files_val, vtk_files_val, seg_files_val)
             ]
         
-        print(f"---- Number of syntheticMRI data_dicts_val: {len(data_dicts_val)}")
-        print("---- Data Dicts:")
-        pprint(data_dicts_val[:2])
+        # print(f"---- Number of syntheticMRI data_dicts_val: {len(data_dicts_val)}")
+        # print("---- Data Dicts:")
+        # pprint(data_dicts_val[:2])
         
         train_files = data_dicts_train
         val_files   = data_dicts_val

@@ -23,8 +23,19 @@ import ignite.distributed as igdist
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
 from torch.utils.tensorboard import SummaryWriter
 from monai.data import DataLoader
+from PIL import Image
 
-
+if not hasattr(Image, "ANTIALIAS"):
+    from PIL import Image as _PILImage
+    try:
+        # Pillow ≥10
+        Image.NEAREST   = _PILImage.Resampling.NEAREST
+        Image.BILINEAR  = _PILImage.Resampling.BILINEAR
+        Image.BICUBIC   = _PILImage.Resampling.BICUBIC
+        Image.LANCZOS   = _PILImage.Resampling.LANCZOS
+        Image.ANTIALIAS = _PILImage.Resampling.LANCZOS
+    except Exception:
+        pass
 
 
 class obj:
@@ -44,6 +55,7 @@ def main(rank=0, args=None):
         print(args.exp_name)
     config = dict2obj(config)
     config.log.exp_name = args.exp_name
+    config.display_prob = args.display_prob
 
     exp_path = os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (args.exp_name, config.DATA.SEED))
     if os.path.exists(exp_path) and args.resume == None:
@@ -208,7 +220,7 @@ def main(rank=0, args=None):
         edge_sampling_mode=edge_sampling_mode,
         domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device)
     )
-    val_loss = SetCriterion(config, matcher, relation_embed, dims=2 if args.pretrain_general else 3, edge_sampling_mode=EDGE_SAMPLING_MODE.NONE)
+    val_loss = SetCriterion(config, matcher, relation_embed, dims=2 if args.pretrain_general else 3, edge_sampling_mode=EDGE_SAMPLING_MODE.UP)  # prima era EDGE_SAMPLING_MODE.NONE
 
     param_dicts = [
         {
@@ -349,7 +361,7 @@ if __name__ == '__main__':
                         help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
     parser.add_argument('--sspt', default=False, action="store_true",
                         help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
-
+    parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
 
 
 
@@ -359,9 +371,11 @@ if __name__ == '__main__':
 
     # --- PRE-TRAINING ---
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth3d',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--continuous'
+        '--exp_name', 'pretraining_mixed_synth_1',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
+        '--continuous',
+        '--display_prob', '1.0',
+        '--parallel'
     ])
 
     if args.parallel:

@@ -14,6 +14,104 @@ def draw_graph_3d(nodes, edges, ax):
     # Add all edges
     for edge in edges:
         ax.plot([xs[edge[0]],xs[edge[1]]],[ys[edge[0]],ys[edge[1]]], [zs[edge[0]],zs[edge[1]]], color="green")
+        
+        
+        
+# def create_sample_visual_3d(samples, number_samples=10, max_points=5000, quantile=0.97):
+#     """
+#     Visualize 3D image volumes (as fed to the model) together with GT and predicted graphs.
+
+#     Left  column: 3D point cloud of high-intensity voxels from samples["images"].
+#     Middle column: GT graph (nodes/edges).
+#     Right column:  Predicted graph (nodes/edges).
+
+#     Args:
+#         samples: dict with keys "images", "nodes", "edges", "pred_nodes", "pred_rels".
+#                  images[i] is expected to be (D,H,W) or (1,D,H,W) torch tensor.
+#         number_samples: how many samples to visualize.
+#         max_points: max number of voxels to plot per sample (for speed).
+#         quantile: keep voxels above this intensity quantile (0–1).
+#     """
+#     px = 1 / plt.rcParams['figure.dpi']  # pixel in inches
+#     fig, axs = plt.subplots(
+#         number_samples,
+#         3,
+#         figsize=(1000 * px, number_samples * 300 * px),
+#         subplot_kw={'projection': '3d'}
+#     )
+
+#     # If number_samples == 1, axs will be 1D; normalize to 2D [rows, cols]
+#     if number_samples == 1:
+#         axs = np.array([axs])
+
+#     for i in range(number_samples):
+#         if i >= len(samples["images"]):
+#             break
+#         try:
+#             # ----- LEFT: 3D image volume -----
+#             vol = samples["images"][i].squeeze().cpu().numpy()  # (D,H,W)
+#             if vol.ndim != 3:
+#                 raise ValueError(f"Expected 3D volume, got shape {vol.shape}")
+
+#             D, H, W = vol.shape
+
+#             # Normalize to [0,1] for robust thresholding
+#             vmin, vmax = vol.min(), vol.max()
+#             if vmax > vmin:
+#                 vol_norm = (vol - vmin) / (vmax - vmin)
+#             else:
+#                 vol_norm = np.zeros_like(vol)
+
+#             # Keep only the brightest voxels (quantile threshold)
+#             thr = np.quantile(vol_norm, quantile)
+#             zz, yy, xx = np.where(vol_norm >= thr)
+
+#             coords = np.stack([xx, yy, zz], axis=1)
+#             if coords.shape[0] > max_points:
+#                 idx = np.random.choice(coords.shape[0], max_points, replace=False)
+#                 coords = coords[idx]
+
+#             ax0 = axs[i, 0]
+#             if coords.size > 0:
+#                 ax0.scatter(coords[:, 0], coords[:, 1], coords[:, 2], s=1)
+#             ax0.set_xlim(0, W)
+#             ax0.set_ylim(0, H)
+#             ax0.set_zlim(0, D)
+#             ax0.set_xlabel("x")
+#             ax0.set_ylabel("y")
+#             ax0.set_zlabel("z")
+
+#             # ----- MIDDLE: GT graph -----
+#             plt.sca(axs[i, 1])
+#             draw_graph_3d(
+#                 samples["nodes"][i].cpu().numpy(),
+#                 samples["edges"][i].cpu().numpy(),
+#                 axs[i, 1]
+#             )
+#             axs[i, 1].set_xlim(0, 1)
+#             axs[i, 1].set_ylim(0, 1)
+#             axs[i, 1].set_zlim(0, 1)
+
+#             # ----- RIGHT: predicted graph -----
+#             plt.sca(axs[i, 2])
+#             draw_graph_3d(
+#                 samples["pred_nodes"][i],
+#                 samples["pred_rels"][i],
+#                 axs[i, 2]
+#             )
+#             axs[i, 2].set_xlim(0, 1)
+#             axs[i, 2].set_ylim(0, 1)
+#             axs[i, 2].set_zlim(0, 1)
+
+#         except Exception as e:
+#             print(f"visualization error occurred for sample {i}, skipping... ({e})")
+
+#     fig.canvas.draw()
+#     data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+#     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+#     plt.close(fig)
+#     return np.transpose(data, (2, 0, 1))
+
 
 def create_sample_visual_3d(samples, number_samples=10):
 

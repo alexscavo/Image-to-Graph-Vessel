@@ -122,8 +122,8 @@ class RelationformerEvaluator(SupervisedEvaluator):
                 path = os.path.join(root_path, "pred_epoch_"+str(engine.state.epoch).zfill(3)+"_iteration_"+str(engine.state.iteration).zfill(5))
                 save_output(path, i, pred_node, pred_edge)
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        '''gc.collect()
+        torch.cuda.empty_cache()'''
         
         return {
             **{
@@ -178,7 +178,8 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
         )
     ]
 
-    mixed_ap_metric = MeanBoxAP(
+    # scommentare
+    '''mixed_ap_metric = MeanBoxAP(
         on_edges=False,
         output_transform=lambda x: (
             x["pred_boxes"],
@@ -194,11 +195,11 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
             x["edges"]
         ),
         max_detections=40
-    )
+    )'''
 
     additional_metrics={
-        "val_node_ap": MeanSingleAP(mixed_ap_metric, lambda x: None, False),
-        "val_edge_ap": MeanSingleAP(mixed_ap_metric, lambda x: None, True),
+        '''"val_node_ap": MeanSingleAP(mixed_ap_metric, lambda x: None, False),
+        "val_edge_ap": MeanSingleAP(mixed_ap_metric, lambda x: None, True),'''  # scommentare
         "val_smd": MeanSMD(
             output_transform=lambda x: (x["boxes"], x["edges"], x["pred_boxes"], x["pred_rels"]),
         ),
@@ -268,7 +269,10 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
             # "val_smd": MeanSMD(
             #     output_transform=lambda x: (x["boxes"], x["edges"], x["pred_boxes"], x["pred_rels"]),
             # )pred_boxes, pred_classes, pred_scores, gt_boxes, gt_classes
-            "val_mixed_AP": mixed_ap_metric
+            # "val_mixed_AP": mixed_ap_metric,  # usare questa?
+            "val_total_loss": MeanLoss(
+                output_transform=lambda x: x["loss"]["total"],
+            ),
         },
         additional_metrics=additional_metrics,
         val_handlers=val_handlers,

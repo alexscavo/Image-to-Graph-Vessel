@@ -1,77 +1,81 @@
 from PIL import Image, ImageDraw
 import numpy as np
-import pickle, os
+import os
+import pyvista as pv
 
-# ---------- paths ----------
-# sat_path   = '/data/scavone/20cities/patches/train/raw/region_0_000000_sat.png' # "/data/scavone/20cities/raw/region_17_sat.png"
-# gt_path    = '/data/scavone/20cities/patches/train/raw/region_0_000000_gt.png' # "/data/scavone/20cities/raw/region_17_gt.png"
-# graph_path = '/data/scavone/20cities/patches/train/vtp/region_0_000000_gt_graph.pickle' # "/data/scavone/20cities/vtp/region_17_gt_graph.pickle" 
+"""
+Visualizer for satellite + GT + VTP graph files.
 
-out_dir    = "/data/scavone/20cities/prova"
+This is a VTP-based version of `prova_overaly_pickle_graphs.py`.
+It loads a graph stored as a VTK PolyData (.vtp), extracts:
+  - nodes_xy: (N, 2) array of (x, y) pixel coordinates
+  - edges_ix: (M, 2) array of indices into nodes_xy
+and overlays the graph on top of satellite and GT images.
+
+You only need to edit the three paths below:
+  sat_path, gt_path, graph_path
+"""
+
+# ---------- paths (EDIT THESE) ----------
+sat_path   = '/data/scavone/20cities/patches/train/raw/sample_000044_data.png'
+gt_path    = '/data/scavone/20cities/patches/train/seg/sample_000044_seg.png'
+graph_path = '/data/scavone/20cities/patches/train/vtp/sample_000044_graph.vtp'
+
+out_dir    = "/data/scavone/prova_vtp_overlay"
 os.makedirs(out_dir, exist_ok=True)
 
 # ---------- overlay params ----------
-mask_color = (255, 0, 0)    # red overlay for GT
-mask_opacity = 0.6          # 0..1 opacity of GT on satellite
-satellite_opacity = 0.5     # 0..1 opacity of satellite on GT
-edge_color_rgba = (0, 255, 0, 220)  # graph edges in green
-node_color_rgba = (255, 255, 0, 220)  # graph nodes in yellow
+mask_color = (255, 0, 0)         # red overlay for GT
+mask_opacity = 0.6               # 0..1 opacity of GT on satellite
+satellite_opacity = 0.5          # 0..1 opacity of satellite on GT
+edge_color_rgba = (0, 255, 0, 220)      # graph edges in green
+node_color_rgba = (255, 255, 0, 220)    # graph nodes in yellow
 edge_width = 2
 node_radius = 2
 
+
 # ---------- helpers ----------
-def load_graph_pickle_generic(pkl_path):
+def load_graph_vtp(vtp_path, img_size=None):
     """
+    Load graph from a .vtp PolyData file.
+
+    If img_size is given, assumes points are in [0,1] normalized coords
+    and rescales them to pixel coords.
+
+    Args:
+        vtp_path: path to .vtp file
+        img_size: (W, H) of the image/patch, e.g. (128, 128)
+
     Returns:
-        nodes_xy: (N,2) float32 array of node positions in *image pixel coords* (x,y)
-        edges_ix: (M,2) int32 array of edges as indices into nodes_xy
-    Tries a few common pickle shapes:
-      - dict: { (x,y): [ (x2,y2), ... ], ... }
-      - tuple/list: (nodes_xy, edges_ix)
-      - dict with 'nodes' and 'edges' arrays
+        nodes_xy: (N, 2) float32 array of node positions in image pixel coords (x, y)
+        edges_ix: (M, 2) int32 array of edges as indices into nodes_xy
     """
-    with open(pkl_path, "rb") as f:
-        obj = pickle.load(f)
+    mesh = pv.read(vtp_path)
 
-    # case 1: (nodes_xy, edges_ix)
-    if isinstance(obj, (list, tuple)) and len(obj) == 2:
-        nodes_xy = np.array(obj[0], dtype=np.float32)
-        edges_ix = np.array(obj[1], dtype=np.int32)
+    # Extract node positions (normalized [0,1] from your patch generator)
+    pts = np.asarray(mesh.points, dtype=np.float32)
+    nodes_xy = pts[:, :2]
+
+    # If image size is given, rescale [0,1] → [0,W]x[0,H]
+    if img_size is not None:
+        W, H = img_size
+        nodes_xy[:, 0] *= W
+        nodes_xy[:, 1] *= H
+
+    # Extract edges from VTK lines
+    if mesh.lines.size == 0:
+        edges_ix = np.zeros((0, 2), dtype=np.int32)
         return nodes_xy, edges_ix
 
-    # case 2: dict with arrays
-    if isinstance(obj, dict) and "nodes" in obj and "edges" in obj:
-        nodes_xy = np.array(obj["nodes"], dtype=np.float32)
-        edges_ix = np.array(obj["edges"], dtype=np.int32)
-        return nodes_xy, edges_ix
+    # lines are flattened: [npts, i0, i1, npts, i2, i3, ...]
+    lines = mesh.lines.reshape(-1, 3)  # (num_lines, 3) where first col is npts (=2)
+    if not np.all(lines[:, 0] == 2):
+        raise ValueError("Expected only 2-point line cells in VTP mesh.lines.")
 
-    # case 3: adjacency dict keyed by coordinates
-    if isinstance(obj, dict):
-        # nodes are keys
-        keys = list(obj.keys())
-        try:
-            nodes_xy = np.array(keys, dtype=np.float32)
-        except Exception:
-            # keys might be something else; try to convert
-            nodes_xy = np.array([tuple(k) for k in keys], dtype=np.float32)
+    edges_ix = lines[:, 1:].astype(np.int32)
 
-        pos2idx = {tuple(p): i for i, p in enumerate(nodes_xy)}
-        edges = []
-        for u_pos, nbrs in obj.items():
-            u = pos2idx.get(tuple(u_pos))
-            if u is None:
-                continue
-            for v_pos in nbrs:
-                v = pos2idx.get(tuple(v_pos))
-                if v is None:
-                    continue
-                # undirected dedup
-                if u < v:
-                    edges.append((u, v))
-        edges_ix = np.array(edges, dtype=np.int32) if edges else np.zeros((0, 2), dtype=np.int32)
-        return nodes_xy, edges_ix
+    return nodes_xy, edges_ix
 
-    raise ValueError(f"Unrecognized graph pickle format at {pkl_path!r}")
 
 def align_nodes_to_seg(nodes_xy, seg_np, verbose=True):
     """
@@ -97,9 +101,11 @@ def align_nodes_to_seg(nodes_xy, seg_np, verbose=True):
     hr_base, hr_swap = hit_rate(base), hit_rate(swap)
     if verbose:
         print(f"hit-rate base={hr_base:.3f}, swap={hr_swap:.3f}")
-        mins, maxs = (swap if hr_swap > hr_base else base).min(0), (swap if hr_swap > hr_base else base).max(0)
+        best = swap if hr_swap > hr_base else base
+        mins, maxs = best.min(0), best.max(0)
         print("nodes bounds (min,max):", mins, maxs)
     return swap if hr_swap > hr_base else base
+
 
 def draw_graph_layer(size, nodes_xy, edges_ix,
                      edge_color=edge_color_rgba, node_color=node_color_rgba,
@@ -131,6 +137,7 @@ def draw_graph_layer(size, nodes_xy, edges_ix,
         draw.ellipse((x - r, y - r, x + r, y + r), outline=node_color, width=1)
 
     return layer
+
 
 def main():
     # ---------- load imagery ----------
@@ -164,10 +171,11 @@ def main():
     sat_rgba2.putalpha(int(round(255 * satellite_opacity)))
     sat_on_gt = Image.alpha_composite(gt_rgba, sat_rgba2)
 
-    # ---------- load & align graph ----------
-    nodes_xy, edges_ix = load_graph_pickle_generic(graph_path)
-    print('NODES:')
-    print(nodes_xy)
+    # ---------- load & align graph from VTP ----------
+    nodes_xy, edges_ix = load_graph_vtp(graph_path, img_size=sat.size)
+    print('Loaded graph:')
+    print('  nodes shape:', nodes_xy.shape)
+    print('  edges shape:', edges_ix.shape)
     nodes_xy = align_nodes_to_seg(nodes_xy, (mask_np > 0).astype(np.uint8), verbose=True)
 
     # ---------- draw graph on top ----------
@@ -179,7 +187,7 @@ def main():
 
     # gt + semi-sat + graph
     gt_sat_graph = Image.alpha_composite(sat_on_gt, graph_layer)
-    # gt_sat_graph.save(os.path.join(out_dir, "region_17_overlay_sat_on_gt_graph.png"))
+    gt_sat_graph.save(os.path.join(out_dir, "overlay_sat_on_gt_graph.png"))
 
     # (optional) also save graph on plain sat / plain gt for inspection
     sat_graph_only = Image.alpha_composite(sat.convert("RGBA"), graph_layer)

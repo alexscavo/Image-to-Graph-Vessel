@@ -1,3 +1,5 @@
+import random
+import sys
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from torch.optim.optimizer import Optimizer
@@ -20,6 +22,10 @@ import gc
 from metrics.similarity import SimilarityMetricPCA, SimilarityMetricTSNE, batch_cka, batch_cosine, batch_euclidean, downsample_examples, upsample_examples
 from metrics.svcca import get_cca_similarity, robust_cca_similarity
 import numpy as np
+from ignite.engine import Events
+from utils.vis_debug_3d import DebugVisualizer3D
+from utils.open3d_tb import Open3DTensorboardLogger
+from training.inference import relation_infer
 
 
 if TYPE_CHECKING:
@@ -29,6 +35,8 @@ else:
     Engine, _ = optional_import("ignite.engine", IgniteInfo.OPT_IMPORT_VERSION, min_version, "Engine")
     Metric, _ = optional_import("ignite.metrics", IgniteInfo.OPT_IMPORT_VERSION, min_version, "Metric")
     EventEnum, _ = optional_import("ignite.engine", IgniteInfo.OPT_IMPORT_VERSION, min_version, "EventEnum")
+    
+debug_check = False
 
 
 # define customized trainer
@@ -107,13 +115,160 @@ class RelationformerTrainer(SupervisedTrainer):
         p = float(iteration + epoch * engine.state.epoch_length) / engine.state.max_epochs / engine.state.epoch_length
         alpha = (2. / (1. + np.exp(-10 * p)) - 1) * self.alpha_coeff
 
+        # ============= DIAGNOSTIC BLOCK START =============
+        if debug_check:
+            print(f"\n{'='*70}")
+            print(f"EPOCH {epoch} - ITERATION {iteration}")
+            print(f"{'='*70}")
+            
+            # 1. Check input data
+            print(f"\n[1. INPUT DATA CHECK]")
+            for i in range(len(nodes)):
+                n_nodes = nodes[i].shape[0]
+                n_edges = edges[i].shape[0]
+                fg_pixels = (segs[i] > 0).sum().item()
+                total_pixels = segs[i].numel()
+                
+                print(f"  Sample {i}:")
+                print(f"    GT: {n_nodes} nodes, {n_edges} edges")
+                print(f"    Seg: {fg_pixels}/{total_pixels} foreground ({100*fg_pixels/total_pixels:.1f}%)")
+                
+                if n_nodes > 0:
+                    coords = nodes[i]
+                    print(f"    Node coords range: [{coords.min():.3f}, {coords.max():.3f}]")
+                    if coords.min() < -0.01 or coords.max() > 1.01:
+                        print(f"    ⚠️ WARNING: Coords outside [0,1]!")
+                
+                if n_edges > 0:
+                    print(f"    Edge indices range: [{edges[i].min()}, {edges[i].max()}]")
+                    if edges[i].max() >= n_nodes:
+                        print(f"    ⚠️ WARNING: Edge indices out of bounds! max_idx={edges[i].max()}, n_nodes={n_nodes}")
+                else:
+                    print(f"    ⚠️ NO EDGES IN GT!")
+        
+        # ============= DIAGNOSTIC BLOCK END =============
+
         if self.seg:
             h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(segs.type(torch.FloatTensor).to(engine.state.device), z_pos, alpha, domain_labels=domains)
         else:
             h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images.type(torch.FloatTensor).to(engine.state.device), z_pos, alpha, domain_labels=domains)
 
-        #print('pred_backbone_domains', pred_backbone_domains)
-        #print('domains', torch.stack((domains, pred_backbone_domains)))
+        # ============= DIAGNOSTIC BLOCK START =============
+        # 2. Check raw model outputs
+        if debug_check:
+            print(f"\n[2. RAW MODEL OUTPUT]")
+            print(f"  h shape: {h.shape}")  # (B, num_queries, hidden_dim)
+            print(f"  pred_logits shape: {out['pred_logits'].shape}")  # (B, num_queries, num_classes)
+            print(f"  pred_nodes shape: {out['pred_nodes'].shape}")  # (B, num_queries, 3 or 6)
+            
+            # 3. Check classification scores
+            print(f"\n[3. CLASSIFICATION]")
+            pred_logits = out['pred_logits']  # (B, num_queries, num_classes)
+            pred_classes = torch.argmax(pred_logits, -1)  # (B, num_queries)
+            probs = torch.softmax(pred_logits, dim=-1)    # (B, num_queries, num_classes)
+
+            # Here we assume:
+            #   class 0 = background
+            #   class 1 = object
+            obj_class = 1
+            bg_class = 0
+
+            for i in range(pred_classes.shape[0]):
+                num_obj = (pred_classes[i] == obj_class).sum().item()
+                num_bg  = (pred_classes[i] == bg_class).sum().item()
+                num_other = pred_classes.shape[1] - num_obj - num_bg
+
+                obj_probs = probs[i, pred_classes[i] == obj_class, obj_class] if num_obj > 0 else torch.tensor([])
+                bg_probs  = probs[i, pred_classes[i] == bg_class, bg_class]   if num_bg  > 0 else torch.tensor([])
+
+                print(f"  Sample {i}:")
+                print(f"    Predicted classes: OBJ={num_obj}, BG={num_bg}, OTHER={num_other}")
+
+                if num_obj > 0:
+                    print(f"    OBJ probs: min={obj_probs.min():.3f}, max={obj_probs.max():.3f}, mean={obj_probs.mean():.3f}")
+                else:
+                    print(f"    ⚠️ NO OBJECT CLASS (1) PREDICTED!")
+                if num_bg > 0:
+                    print(f"    BG probs:  min={bg_probs.min():.3f}, max={bg_probs.max():.3f}, mean={bg_probs.mean():.3f}")
+            
+        # ============= DIAGNOSTIC BLOCK END =============
+
+        infer = relation_infer(
+            h.detach(),
+            out,
+            self.network, 
+            self.config.MODEL.DECODER.OBJ_TOKEN, 
+            self.config.MODEL.DECODER.RLN_TOKEN, 
+            apply_nms=False
+        )
+
+        pred_nodes_list = infer["pred_nodes"] 
+        pred_edges_list = infer["pred_rels"]
+
+        # ============= DIAGNOSTIC BLOCK START =============
+        # 4. Check inference results
+        if random.random() < 0.1:
+            print(f"\n[4. INFERENCE RESULTS]")
+            N = 1  # number of samples you want to inspect
+            for i in range(min(N, len(pred_nodes_list))):
+                pred_n = pred_nodes_list[i]
+                pred_e = pred_edges_list[i]
+                
+                n_pred_nodes = pred_n.shape[0] if isinstance(pred_n, np.ndarray) else 0
+                n_pred_edges = pred_e.shape[0] if isinstance(pred_e, np.ndarray) else 0
+                
+                print(f"  Sample {i}:")
+                print(f"    Predicted: {n_pred_nodes} nodes, {n_pred_edges} edges")
+                
+                if n_pred_nodes == 0:
+                    print(f"    ⚠️ NO NODES PREDICTED!")
+                else:
+                    print(f"    Node coords range: [{pred_n.min():.3f}, {pred_n.max():.3f}]")
+                
+                if n_pred_edges == 0:
+                    print(f"    ⚠️ NO EDGES PREDICTED!")
+                
+                # Compare with GT
+                gt_n = nodes[i].shape[0]
+                gt_e = edges[i].shape[0]
+                print(f"    GT had: {gt_n} nodes, {gt_e} edges")
+                print(f"    Recall: nodes={n_pred_nodes/max(gt_n,1):.2f}, edges={n_pred_edges/max(gt_e,1):.2f}")
+            
+            # print(f"{'='*70}\n")
+        # ============= DIAGNOSTIC BLOCK END =============
+
+        # Move to CPU & numpy
+        seg_np = segs[0].detach().cpu().numpy()
+
+        # print("seg min/max:", seg_np.min(), seg_np.max())
+
+        non_empty = seg_np.max() > 0
+        # print("seg contains foreground?", non_empty)
+
+        if hasattr(self, "viz3d"):
+            self.viz3d.maybe_save(
+                segs=segs,
+                images=images,
+                gt_nodes_list=nodes,
+                gt_edges_list=edges,
+                pred_nodes_list=pred_nodes_list,
+                pred_edges_list=pred_edges_list,
+                epoch=epoch,
+                step=iteration,
+                batch_index=0,
+                tag="train",
+            )
+    
+        # if hasattr(self, "open3d_tb") and iteration % 1000 == 0:
+        #     self.open3d_tb.maybe_log(
+        #         segs=segs,
+        #         gt_nodes_list=nodes,
+        #         pred_nodes_list=pred_nodes_list,
+        #         epoch=epoch,
+        #         step=iteration,
+        #         batch_index=0,
+        #         tag="train",
+        #     )
         
         target["interpolated_domains"] = interpolated_domains
         valid_token = torch.argmax(out['pred_logits'], -1)
@@ -128,7 +283,19 @@ class RelationformerTrainer(SupervisedTrainer):
         #     max_norm=GRADIENT_CLIP_L2_NORM,
         #     norm_type=2,
         # )
-        losses['total'].backward()
+
+        # ============= DIAGNOSTIC BLOCK START =============
+        # 5. Check losses
+        # print(f"[5. LOSSES]")
+        # print(f"  Classification: {losses.get('class', 0):.4f}")
+        # print(f"  Node loss: {losses.get('nodes', 0):.4f}")
+        # print(f"  Edge loss: {losses.get('edges', 0):.4f}")
+        # print(f"  Box loss: {losses.get('boxes', 0):.4f}")
+        # print(f"  Total loss: {losses['total']:.4f}")
+        # print(f"{'='*70}\n")
+        # ============= DIAGNOSTIC BLOCK END =============
+
+        losses['total'].backward()        
         self.optimizer.step()
 
         del images
@@ -187,45 +354,51 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
             writer,
             tag_name="classification_loss",
             output_transform=lambda x: x["loss"]["class"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="node_loss",
             output_transform=lambda x: x["loss"]["nodes"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1,
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="edge_loss",
             output_transform=lambda x: x["loss"]["edges"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1,
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="box_loss",
             output_transform=lambda x: x["loss"]["boxes"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1,
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="card_loss",
             output_transform=lambda x: x["loss"]["cards"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1,
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="total_loss",
             output_transform=lambda x: x["loss"]["total"],
-            global_epoch_transform=lambda x: scheduler.last_epoch
+            global_epoch_transform=lambda x: scheduler.last_epoch,
+            epoch_log=1,
         ),
         TensorBoardStatsHandler(
             writer,
             tag_name="domain_loss",
             output_transform=lambda x: x["loss"]["domain"],
             global_epoch_transform=lambda x: scheduler.last_epoch,
-            epoch_log=True,
-            epoch_interval=1
+            epoch_log=1,
+            # epoch_interval=1
         ),
     ]
     # train_post_transform = Compose(
@@ -280,5 +453,36 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         alpha_coeff=config.TRAIN.ALPHA_COEFF,
         # amp=fp16,
     )
+
+    out_dir = os.path.join(
+        '/data/scavone/cross-dim_i2g_3d/visual di prova',
+        "runs",
+        f"{config.log.exp_name}_{config.DATA.SEED}",
+        "debug_vis"
+    )
+    # trainer.viz3d = DebugVisualizer3D(
+    #     out_dir=out_dir,
+    #     prob=config.display_prob,
+    #     max_per_epoch=8,
+    #     show_seg=True,
+    # )
+    
+    trainer.viz3d = DebugVisualizer3D(
+        out_dir=out_dir,
+        prob=config.display_prob,
+        max_per_epoch=8,
+        show_seg=False,
+    )
+    
+    trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: trainer.viz3d.start_epoch())
+    
+    # trainer.open3d_tb = Open3DTensorboardLogger(
+    #     writer=writer,
+    #     prob=1.0,          # always try to log when allowed
+    #     max_per_epoch=1,   # <= 1 image per epoch
+    #     level=0.5,
+    #     tag_prefix="3d_debug",
+    # )
+    # trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: trainer.open3d_tb.start_epoch())
 
     return trainer

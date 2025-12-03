@@ -6,6 +6,7 @@ import pickle
 import random
 import os
 import json
+import csv
 from argparse import ArgumentParser
 from tqdm import tqdm
 import torch
@@ -16,6 +17,19 @@ pad = [5, 5, 0]
 
 total_min = 1
 total_max = 0
+
+# Global patch budgets and counters per split
+patch_budget = {
+    "train": None,
+    "val": None,
+    "test": None,
+}
+
+patch_count = {
+    "train": 0,
+    "val": 0,
+    "test": 0,
+}
 
 
 def angle(v1, v2):
@@ -83,29 +97,15 @@ def neighbor_to_integer(n_in):
 
 
 def save_input(path, idx, patch, patch_seg, patch_coord, patch_edge):
-    """[summary]
-
-    Args:
-        patch ([type]): [description]
-        patch_coord ([type]): [description]
-        patch_edge ([type]): [description]
-    """
+    """Save a single patch (image, seg, and graph) to disk."""
 
     global total_min
     global total_max
-    imageio.imwrite(path+'raw/sample_'+str(idx).zfill(6)+'_data.png', patch)
-    imageio.imwrite(path+'seg/sample_'+str(idx).zfill(6)+'_seg.png', patch_seg)
-
-    # vertices, faces, _, _ = marching_cubes_lewiner(patch)
-    # vertices = vertices/np.array(patch.shape)
-    # faces = np.concatenate((np.int32(3*np.ones((faces.shape[0],1))), faces), 1)
-
-    # mesh = pyvista.PolyData(vertices)
-    # mesh.faces = faces.flatten()
-    # mesh.save(path+'mesh/sample_'+str(idx).zfill(4)+'_segmentation.stl')
+    imageio.imwrite(path + 'raw/sample_' + str(idx).zfill(6) + '_data.png', patch)
+    imageio.imwrite(path + 'seg/sample_' + str(idx).zfill(6) + '_seg.png', patch_seg)
 
     patch_edge = np.concatenate(
-        (np.int32(2*np.ones((patch_edge.shape[0], 1))), patch_edge), 1)
+        (np.int32(2 * np.ones((patch_edge.shape[0], 1))), patch_edge), 1)
     mesh = pyvista.PolyData(patch_coord)
     cur_min = np.min(patch_coord[:, :2])
     cur_max = np.max(patch_coord[:, :2])
@@ -116,46 +116,59 @@ def save_input(path, idx, patch, patch_seg, patch_coord, patch_edge):
         total_max = cur_max
         print(total_max)
     mesh.lines = patch_edge.flatten()
-    mesh.save(path+'vtp/sample_'+str(idx).zfill(6)+'_graph.vtp')
+    mesh.save(path + 'vtp/sample_' + str(idx).zfill(6) + '_graph.vtp')
 
 
-def patch_extract(save_path, image, seg,  mesh, device=None):
-    """[summary]
+def patch_extract(save_path, image, seg, mesh, split_name, max_patches_for_image=None, device=None):
+    """Extract patches from an image and save them, respecting per-split budgets.
 
     Args:
-        image ([type]): [description]
-        coordinates ([type]): [description]
-        lines ([type]): [description]
-        patch_size (tuple, optional): [description]. Defaults to (64,64,64).
-        num_patch (int, optional): [description]. Defaults to 2.
-
-    Returns:
-        [type]: [description]
+        save_path (str): Base directory for this split (contains raw/ seg/ vtp/).
+        image (np.ndarray): Input image (H, W, C).
+        seg (np.ndarray): Segmentation mask (H, W).
+        mesh (pyvista.PolyData): Full graph mesh.
+        split_name (str): One of "train", "val", "test".
+        max_patches_for_image (int, optional): Max patches to save from this image.
+        device: Unused; kept for API compatibility.
     """
-    global image_id
+    global image_id, patch_budget, patch_count
+
     p_h, p_w, _ = patch_size
     pad_h, pad_w, _ = pad
 
-    p_h = p_h - 2*pad_h
-    p_w = p_w - 2*pad_w
+    p_h = p_h - 2 * pad_h
+    p_w = p_w - 2 * pad_w
 
     h, w, d = image.shape
-    x_ = np.int32(np.linspace(5, h-5-p_h, 32))
-    y_ = np.int32(np.linspace(5, w-5-p_w, 32))
+    x_ = np.int32(np.linspace(5, h - 5 - p_h, 32))
+    y_ = np.int32(np.linspace(5, w - 5 - p_w, 32))
 
     ind = np.meshgrid(x_, y_, indexing='ij')
-    # Center Crop based on foreground
+
+    num_saved_from_image = 0
 
     for i, start in enumerate(list(np.array(ind).reshape(2, -1).T)):
-        # print(image.shape, seg.shape)
-        start = np.array((start[0], start[1], 0))
-        end = start + np.array(patch_size)-1 - 2*np.array(pad)
+        # Check global budget for this split
+        if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
+            return num_saved_from_image
 
-        patch = np.pad(image[start[0]:start[0]+p_h, start[1]:start[1] +
-                       p_w, :], ((pad_h, pad_h), (pad_w, pad_w), (0, 0)))
+        # Check per-image budget
+        if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
+            return num_saved_from_image
+
+        start = np.array((start[0], start[1], 0))
+        end = start + np.array(patch_size) - 1 - 2 * np.array(pad)
+
+        patch = np.pad(
+            image[start[0]:start[0] + p_h, start[1]:start[1] + p_w, :],
+            ((pad_h, pad_h), (pad_w, pad_w), (0, 0))
+        )
         patch_list = [patch]
 
-        patch_seg = np.pad(seg[start[0]:start[0]+p_h, start[1]:start[1]+p_w, ], ((pad_h, pad_h), (pad_w, pad_w)))
+        patch_seg = np.pad(
+            seg[start[0]:start[0] + p_h, start[1]:start[1] + p_w],
+            ((pad_h, pad_h), (pad_w, pad_w))
+        )
         seg_list = [patch_seg]
 
         input = torch.from_numpy(patch_seg).unsqueeze(0).unsqueeze(0).float() / 255.
@@ -166,79 +179,72 @@ def patch_extract(save_path, image, seg,  mesh, device=None):
         weights = weights.view(1, 1, 3, 3).repeat(1, 1, 1, 1)
 
         x = conv2d(input, weight=weights, padding=1)
-        for i in range(3):
+        for _ in range(3):
             x = conv2d(x, weight=weights, padding=1)
 
         aug_img = x[0][0]
         aug_img[aug_img > 1] = 1
         aug_img *= 255
         patch_list = [aug_img.byte()]
-        # collect all the nodes
-        bounds = [start[0], end[0], start[1], end[1], -0.5, 0.5]
 
+        bounds = [start[0], end[0], start[1], end[1], -0.5, 0.5]
         clipped_mesh = mesh.clip_box(bounds, invert=False)
         patch_coordinates = np.float32(np.asarray(clipped_mesh.points))
         patch_edge = clipped_mesh.cells[np.sum(
-            clipped_mesh.celltypes == 1)*2:].reshape(-1, 3)
+            clipped_mesh.celltypes == 1) * 2:].reshape(-1, 3)
 
         patch_coord_ind = np.where(
-            (np.prod(patch_coordinates >= start, 1)*np.prod(patch_coordinates <= end, 1)) > 0.0)
-        # all coordinates inside the patch
+            (np.prod(patch_coordinates >= start, 1) * np.prod(patch_coordinates <= end, 1)) > 0.0)
         patch_coordinates = patch_coordinates[patch_coord_ind[0], :]
         patch_edge = [tuple(l) for l in patch_edge[:, 1:] if l[0]
                       in patch_coord_ind[0] and l[1] in patch_coord_ind[0]]
 
-        # flatten all the indices of the edges which completely lie inside patch
         temp = np.array(patch_edge).flatten()
-        # remap the edge indices according to the new order
-        temp = [np.where(patch_coord_ind[0] == ind) for ind in temp]
-        # reshape the edge list into previous format
+        temp = [np.where(patch_coord_ind[0] == ind_) for ind_ in temp]
         patch_edge = np.array(temp).reshape(-1, 2)
 
         if patch_coordinates.shape[0] < 2 or patch_edge.shape[0] < 1 or patch_coordinates.shape[0] > 80:
             continue
-        # concatenate final variables
-        patch_coordinates = (patch_coordinates-start +
-                             np.array(pad))/np.array(patch_size)
-        patch_coord_list = [patch_coordinates]  # .to(device))
-        patch_edge_list = [patch_edge]  # .to(device))
+
+        patch_coordinates = (patch_coordinates - start + np.array(pad)) / np.array(patch_size)
+        patch_coord_list = [patch_coordinates]
+        patch_edge_list = [patch_edge]
 
         mod_patch_coord_list, mod_patch_edge_list = prune_patch(
             patch_coord_list, patch_edge_list)
 
-        # save data
-        for patch, patch_seg, patch_coord, patch_edge in zip(patch_list, seg_list, mod_patch_coord_list, mod_patch_edge_list):
+        for patch, patch_seg, patch_coord, patch_edge in zip(
+                patch_list, seg_list, mod_patch_coord_list, mod_patch_edge_list):
             if patch_seg.sum() > 10:
+                # Re-check budgets just before saving
+                if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
+                    return num_saved_from_image
+
+                if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
+                    return num_saved_from_image
+
                 save_input(save_path, image_id, patch,
                            patch_seg, patch_coord, patch_edge)
-                image_id = image_id+1
-                # print('Image No', image_id)
+                image_id = image_id + 1
+                patch_count[split_name] += 1
+                num_saved_from_image += 1
+
+    return num_saved_from_image
 
 
 def prune_patch(patch_coord_list, patch_edge_list):
-    """[summary]
-
-    Args:
-        patch_list ([type]): [description]
-        patch_coord_list ([type]): [description]
-        patch_edge_list ([type]): [description]
-
-    Returns:
-        [type]: [description]
-    """
+    """Prune patch graphs by removing nearly collinear degree-2 nodes."""
     mod_patch_coord_list = []
     mod_patch_edge_list = []
 
     for coord, edge in zip(patch_coord_list, patch_edge_list):
 
-        # find largest graph segment in graph and in skeleton and see if they match
         dist_adj = np.zeros((coord.shape[0], coord.shape[0]))
         dist_adj[edge[:, 0], edge[:, 1]] = np.sum(
-            (coord[edge[:, 0], :]-coord[edge[:, 1], :])**2, 1)
+            (coord[edge[:, 0], :] - coord[edge[:, 1], :]) ** 2, 1)
         dist_adj[edge[:, 1], edge[:, 0]] = np.sum(
-            (coord[edge[:, 0], :]-coord[edge[:, 1], :])**2, 1)
+            (coord[edge[:, 0], :] - coord[edge[:, 1], :]) ** 2, 1)
 
-        # straighten the graph by removing redundant nodes
         start = True
         node_mask = np.ones(coord.shape[0], dtype=bool)
         while start:
@@ -252,22 +258,22 @@ def prune_patch(patch_coord_list, patch_edge_list):
                 p1 = coord[idx, :]
                 p2 = coord[deg_2_neighbor[0], :]
                 p3 = coord[deg_2_neighbor[1], :]
-                l1 = p2-p1
-                l2 = p3-p1
-                node_angle = angle(l1, l2)*180 / math.pi
+                l1 = p2 - p1
+                l2 = p3 - p1
+                node_angle = angle(l1, l2) * 180 / math.pi
                 if node_angle > 160:
                     node_mask[idx] = False
                     dist_adj[deg_2_neighbor[0],
-                             deg_2_neighbor[1]] = np.sum((p2-p3)**2)
+                             deg_2_neighbor[1]] = np.sum((p2 - p3) ** 2)
                     dist_adj[deg_2_neighbor[1],
-                             deg_2_neighbor[0]] = np.sum((p2-p3)**2)
+                             deg_2_neighbor[0]] = np.sum((p2 - p3) ** 2)
 
                     dist_adj[idx, deg_2_neighbor[0]] = 0.0
                     dist_adj[deg_2_neighbor[0], idx] = 0.0
                     dist_adj[idx, deg_2_neighbor[1]] = 0.0
                     dist_adj[deg_2_neighbor[1], idx] = 0.0
                     break
-                elif n == len(deg_2)-1:
+                elif n == len(deg_2) - 1:
                     start = False
 
         new_coord = coord[node_mask, :]
@@ -279,8 +285,6 @@ def prune_patch(patch_coord_list, patch_edge_list):
 
     return mod_patch_coord_list, mod_patch_edge_list
 
-#indrange_test = range(10)
-#indrange_train = []
 
 parser = ArgumentParser()
 parser.add_argument('--source',
@@ -299,8 +303,7 @@ parser.add_argument('--source_number',
 parser.add_argument('--split',
                     default=0.8,
                     type=float,
-                    help='Train/Test split. 0.8 means 80% of the data will be training data and 20% testing data'
-                        'Default: 0.8')
+                    help='(Unused if --split_csv is provided) Train/Test split.')
 parser.add_argument('--city_names',
                     default=None,
                     required=False,
@@ -310,16 +313,33 @@ parser.add_argument('--seed',
                     type=int,
                     required=False,
                     help='Random seed')
+parser.add_argument('--split_csv',
+                    default=None,
+                    type=str,
+                    required=True,
+                    help='CSV file with columns id,split (train/val/test)')
+parser.add_argument('--train_patches',
+                    type=int,
+                    required=True,
+                    help='Target number of patches for training split')
+parser.add_argument('--val_patches',
+                    type=int,
+                    required=True,
+                    help='Target number of patches for validation split')
+parser.add_argument('--test_patches',
+                    type=int,
+                    required=True,
+                    help='Target number of patches for test split')
 
 image_id = 1
 
+
 def generate_data(args):
-    global image_id
+    global image_id, patch_budget, patch_count
 
     root_dir = args.source
     target_dir = args.target
     amount_images = args.source_number
-    split = args.split
 
     # If data has prefix with city names, a json with all names must be provided
     cities = []
@@ -331,18 +351,57 @@ def generate_data(args):
     # Sets the seed for reproducibility
     random.seed(args.seed)
 
+    # Initialize budgets and counters
+    patch_budget["train"] = args.train_patches
+    patch_budget["val"] = args.val_patches
+    patch_budget["test"] = args.test_patches
+
+    patch_count["train"] = 0
+    patch_count["val"] = 0
+    patch_count["test"] = 0
+
     indrange_train = []
+    indrange_val = []
     indrange_test = []
 
-    for x in range(amount_images):
-        if random.random() <= split:
-            indrange_train.append(x)
-        else:
-            indrange_test.append(x)
+    # Read split information from CSV
+    with open(args.split_csv, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if 'patient_id' not in row or 'split' not in row:
+                continue
 
+            pid = row['patient_id'].strip()
+
+            # Expect format like: region_0, region_10, region_100
+            if pid.startswith("region_"):
+                num_part = pid.replace("region_", "")
+                # In case something like region_0_extra appears:
+                num_part = num_part.split("_")[0]
+                try:
+                    idx = int(num_part)
+                except ValueError:
+                    continue
+            else:
+                continue
+
+            # Range check
+            if idx < 0 or idx >= amount_images:
+                continue
+
+            # Assign to split
+            s = row['split'].strip().lower()
+            if s in ('train', 'training'):
+                indrange_train.append(idx)
+            elif s in ('val', 'valid', 'validation'):
+                indrange_val.append(idx)
+            elif s in ('test', 'testing'):
+                indrange_test.append(idx)
+
+
+    # ------------------ TRAIN ------------------
     image_id = 1
-
-    train_path = f"{target_dir}/train_data/"
+    train_path = f"{target_dir}/train/"
     if not os.path.isdir(train_path):
         os.makedirs(train_path)
         os.makedirs(train_path + '/seg')
@@ -357,25 +416,26 @@ def generate_data(args):
     vtk_files = []
 
     for ind in indrange_train:
-        # If data is prefixed with city name, add this to the filenames
-        file_prefix = \
-            f"{root_dir}/{cities[ind]['name']}_region_{cities[ind]['id']}_" if len(cities) > 0 else f"{root_dir}/region_{ind}_"
-        raw_files.append(f"{file_prefix}sat")
-        seg_files.append(f"{file_prefix}gt.png")
-        vtk_files.append(f"{file_prefix}refine_gt_graph.p")
+        raw_files.append(f"{root_dir}/raw/region_{ind}_sat")
+        seg_files.append(f"{root_dir}/raw/region_{ind}_gt.png")
+        vtk_files.append(f"{root_dir}/vtp/region_{ind}_gt_graph.pickle")
 
-    for ind in tqdm(range(len(raw_files))):
-        print(ind)
+    num_train_images = len(raw_files)
+
+    for i in tqdm(range(num_train_images)):
+        if patch_count["train"] >= patch_budget["train"]:
+            break
+        # print('Train image', i)
         try:
-            sat_img = imageio.imread(raw_files[ind] + ".png")
-        except:
-            sat_img = imageio.imread(raw_files[ind] + ".jpg")
+            sat_img = imageio.imread(raw_files[i] + ".png")
+        except Exception:
+            sat_img = imageio.imread(raw_files[i] + ".jpg")
 
-        with open(vtk_files[ind], 'rb') as f:
+        with open(vtk_files[i], 'rb') as f:
             graph = pickle.load(f)
         node_array, edge_array = convert_graph(graph)
 
-        gt_seg = imageio.imread(seg_files[ind])
+        gt_seg = imageio.imread(seg_files[i])
         patch_coord = np.concatenate(
             (node_array, np.int32(np.zeros((node_array.shape[0], 1)))), 1)
         mesh = pyvista.PolyData(patch_coord)
@@ -383,10 +443,69 @@ def generate_data(args):
             (np.int32(2 * np.ones((edge_array.shape[0], 1))), edge_array), 1)
         mesh.lines = patch_edge.flatten()
 
-        patch_extract(train_path, sat_img, gt_seg, mesh)
+        remaining_images = max(num_train_images - i, 1)
+        remaining_patches = patch_budget["train"] - patch_count["train"]
+        max_for_this_image = max(0, math.ceil(remaining_patches / remaining_images))
 
+        patch_extract(train_path, sat_img, gt_seg, mesh,
+                      split_name="train",
+                      max_patches_for_image=max_for_this_image)
+
+    # ------------------ VAL ------------------
     image_id = 1
-    test_path = f"{target_dir}/test_data/"
+    val_path = f"{target_dir}/val/"
+    if not os.path.isdir(val_path):
+        os.makedirs(val_path)
+        os.makedirs(val_path + '/seg')
+        os.makedirs(val_path + '/vtp')
+        os.makedirs(val_path + '/raw')
+    else:
+        raise Exception("Val folder is non-empty")
+    print('Preparing Val Data')
+
+    raw_files = []
+    seg_files = []
+    vtk_files = []
+
+    for ind in indrange_val:
+        raw_files.append(f"{root_dir}/raw/region_{ind}_sat")
+        seg_files.append(f"{root_dir}/raw/region_{ind}_gt.png")
+        vtk_files.append(f"{root_dir}/vtp/region_{ind}_gt_graph.pickle")
+
+    num_val_images = len(raw_files)
+
+    for i in tqdm(range(num_val_images)):
+        if patch_count["val"] >= patch_budget["val"]:
+            break
+        # print('Val image', i)
+        try:
+            sat_img = imageio.imread(raw_files[i] + ".png")
+        except Exception:
+            sat_img = imageio.imread(raw_files[i] + ".jpg")
+
+        with open(vtk_files[i], 'rb') as f:
+            graph = pickle.load(f)
+        node_array, edge_array = convert_graph(graph)
+
+        gt_seg = imageio.imread(seg_files[i])
+        patch_coord = np.concatenate(
+            (node_array, np.int32(np.zeros((node_array.shape[0], 1)))), 1)
+        mesh = pyvista.PolyData(patch_coord)
+        patch_edge = np.concatenate(
+            (np.int32(2 * np.ones((edge_array.shape[0], 1))), edge_array), 1)
+        mesh.lines = patch_edge.flatten()
+
+        remaining_images = max(num_val_images - i, 1)
+        remaining_patches = patch_budget["val"] - patch_count["val"]
+        max_for_this_image = max(0, math.ceil(remaining_patches / remaining_images))
+
+        patch_extract(val_path, sat_img, gt_seg, mesh,
+                      split_name="val",
+                      max_patches_for_image=max_for_this_image)
+
+    # ------------------ TEST ------------------
+    image_id = 1
+    test_path = f"{target_dir}/test/"
     if not os.path.isdir(test_path):
         os.makedirs(test_path)
         os.makedirs(test_path + '/seg')
@@ -402,25 +521,26 @@ def generate_data(args):
     vtk_files = []
 
     for ind in indrange_test:
-        # If data is prefixed with city name, add this to the filenames
-        file_prefix = \
-            f"{root_dir}/{cities[ind]['name']}_region_{cities[ind]['id']}_" if len(cities) > 0 else f"{root_dir}/region_{ind}_"
-        raw_files.append(f"{file_prefix}sat")
-        seg_files.append(f"{file_prefix}gt.png")
-        vtk_files.append(f"{file_prefix}refine_gt_graph.p")
+        raw_files.append(f"{root_dir}/raw/region_{ind}_sat")
+        seg_files.append(f"{root_dir}/raw/region_{ind}_gt.png")
+        vtk_files.append(f"{root_dir}/vtp/region_{ind}_gt_graph.pickle")
 
-    for ind in range(len(raw_files)):
-        print(ind)
+    num_test_images = len(raw_files)
+
+    for i in tqdm(range(num_test_images)):
+        if patch_count["test"] >= patch_budget["test"]:
+            break
+        # print('Test image', i)
         try:
-            sat_img = imageio.imread(raw_files[ind] + ".png")
-        except:
-            sat_img = imageio.imread(raw_files[ind] + ".jpg")
+            sat_img = imageio.imread(raw_files[i] + ".png")
+        except Exception:
+            sat_img = imageio.imread(raw_files[i] + ".jpg")
 
-        with open(vtk_files[ind], 'rb') as f:
+        with open(vtk_files[i], 'rb') as f:
             graph = pickle.load(f)
         node_array, edge_array = convert_graph(graph)
 
-        gt_seg = imageio.imread(seg_files[ind])
+        gt_seg = imageio.imread(seg_files[i])
         patch_coord = np.concatenate(
             (node_array, np.int32(np.zeros((node_array.shape[0], 1)))), 1)
         mesh = pyvista.PolyData(patch_coord)
@@ -428,9 +548,23 @@ def generate_data(args):
             (np.int32(2 * np.ones((edge_array.shape[0], 1))), edge_array), 1)
         mesh.lines = patch_edge.flatten()
 
-        patch_extract(test_path, sat_img, gt_seg, mesh)
+        remaining_images = max(num_test_images - i, 1)
+        remaining_patches = patch_budget["test"] - patch_count["test"]
+        max_for_this_image = max(0, math.ceil(remaining_patches / remaining_images))
+
+        patch_extract(test_path, sat_img, gt_seg, mesh,
+                      split_name="test",
+                      max_patches_for_image=max_for_this_image)
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
+    args = parser.parse_args([
+        '--source', '/data/scavone/20cities',
+        '--target', '/data/scavone/20cities/patches', 
+        '--source_number', '180',
+        '--split_csv', '/data/scavone/20cities/splits.csv',
+        '--train_patches', '99200',
+        '--val_patches', '24800',
+        '--test_patches', '25000'
+    ])
     generate_data(args)

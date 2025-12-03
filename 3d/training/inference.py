@@ -61,8 +61,26 @@ def relation_infer(h, out, model, obj_token, rln_token, apply_nms=True, thresh=0
             except AttributeError:
                 relation_pred1 = model.relation_embed(relation_feature1).detach()
                 relation_pred2 = model.relation_embed(relation_feature2).detach()
+                
             relation_pred = (relation_pred1+relation_pred2)/2.0
             pred_rel = torch.nonzero(torch.argmax(relation_pred, -1)).squeeze(1).cpu().numpy()
+            
+            # DEBUG START  
+            # logits = relation_pred   # shape: (num_pairs, 2)
+            # edge_logit = logits[:, 1]
+            # noedge_logit = logits[:, 0]
+
+            # print("[RELATION_LOGITS] edge_logit  min={:.3f}  max={:.3f}  mean={:.3f}".format(
+            #     edge_logit.min().item(), edge_logit.max().item(), edge_logit.mean().item()))
+
+            # print("[RELATION_LOGITS] noedge_logit min={:.3f}  max={:.3f}  mean={:.3f}".format(
+            #     noedge_logit.min().item(), noedge_logit.max().item(), noedge_logit.mean().item()))
+            
+            # edge_probs = relation_pred.softmax(-1)[:, 1]   # probability of EDGE
+            # print("[RELATION_PROBS] P(edge)  min={:.3f}  max={:.3f}  mean={:.3f}".format(
+            #     edge_probs.min().item(), edge_probs.max().item(), edge_probs.mean().item()))
+            # DEBUG END
+            
             pred_rels.append(node_pairs_valid[pred_rel].cpu().numpy())
             pred_rel_score.append(relation_pred.softmax(-1)[pred_rel, 1].cpu().numpy())
             pred_rel_class.append(torch.argmax(relation_pred, -1)[pred_rel].cpu().numpy()-1.0)

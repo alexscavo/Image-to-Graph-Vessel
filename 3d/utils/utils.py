@@ -95,6 +95,7 @@ def image_graph_collate(batch, pre2d=False, gaussian_augment=False):
         points = [item_ for item in batch for item_ in item[2]]
     edges = [item_ for item in batch for item_ in item[3]]
     domains = torch.tensor([item[5] for item in batch]).flatten()
+
     return [images, segs, points, edges, z_pos, domains]
 
 def rotate_coordinates(points, alpha, beta, gamma):
@@ -125,6 +126,37 @@ def rotate_coordinates(points, alpha, beta, gamma):
     points = torch.matmul(points - 0.5, rotation) + 0.5
 
     return points
+
+# def rotate_coordinates(points, alpha, beta, gamma):
+#     alpha_rad = radians(alpha)
+#     beta_rad = radians(beta)
+#     gamma_rad = radians(gamma)
+
+#     yaw_matrix = torch.Tensor([
+#         [cos(-alpha_rad), -sin(-alpha_rad), 0],
+#         [sin(-alpha_rad), cos(-alpha_rad), 0],
+#         [0, 0, 1]
+#     ])
+
+#     pitch_matrix = torch.Tensor([
+#         [cos(-beta_rad), 0, sin(-beta_rad)],
+#         [0, 1, 0],
+#         [-sin(-beta_rad), 0, cos(-beta_rad)]
+#     ])
+
+#     roll_matrix = torch.Tensor([
+#         [1, 0, 0],
+#         [0, cos(-gamma_rad), -sin(-gamma_rad)],
+#         [0, sin(-gamma_rad), cos(-gamma_rad)]
+#     ])
+
+#     rotation = torch.matmul(torch.matmul(pitch_matrix, roll_matrix), yaw_matrix)
+
+#     points = torch.matmul(points - 0.5, rotation) + 0.5
+
+#     return points
+
+
 
 def rotate_image(image, alpha, beta, gamma):
     transform = tio.Affine(
@@ -380,3 +412,36 @@ def split_reader_nifti(split_path: Path):
             split_map[base] = _normalize_split(row["split"])
 
     return split_map
+
+
+import numpy as np
+import open3d as o3d
+
+def render_open3d_image(geometries, width=640, height=480):
+    """
+    Render a list of Open3D geometries to an offscreen RGB image (H, W, 3).
+    """
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(visible=False, width=width, height=height)
+    for g in geometries:
+        vis.add_geometry(g)
+
+    vis.get_render_option().background_color = np.array([0, 0, 0])
+
+    vis.poll_events()
+    vis.update_renderer()
+    img = vis.capture_screen_float_buffer(do_render=True)
+    vis.destroy_window()
+
+    img = np.asarray(img)  # H, W, 3 (float [0,1])
+    img = (img * 255).astype(np.uint8)
+    return img
+
+
+
+
+
+
+
+
+

@@ -3,11 +3,11 @@ DATA:
     BATCH_SIZE: 32 # 48 Batch size for a single GPU, could be overwritten by command line argument
     DATA_PATH: ""
     SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
-    TARGET_DATA_PATH: "/data/scavone/syntheticMRI/patches"
-    NUM_SOURCE_SAMPLES: -1  # all
-    NUM_TARGET_SAMPLES: 5000 # train + validation
-    TEST_DATA_PATH: "/data/scavone/syntheticMRI/patches"
-    DATASET: "mixed_synth_3d" # Dataset name
+    TARGET_DATA_PATH: "/data/scavone/20cities/patches"
+    NUM_SOURCE_SAMPLES: 1000  # all
+    NUM_TARGET_SAMPLES: 1000 # train + validation
+    TEST_DATA_PATH: "/data/scavone/20cities/patches"
+    DATASET: "road_dataset" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
     PAD_SIZE: [0, 0, 0]    # [5, 5, 5]
     GROWTH_RANGE: [5, 10]
@@ -105,7 +105,7 @@ TRAIN:
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
     SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 5 # validation interval
+    VAL_INTERVAL: 1 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss

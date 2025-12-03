@@ -74,59 +74,13 @@ def apply_affine(points: np.ndarray, affine: np.ndarray) -> np.ndarray:
     return pts_world
 
 
-# def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray = None):
-#     """
-#     Load all .vtp graph files corresponding to base_id from vtp_dir.
-
-#     If affine is provided, graph node coordinates are mapped to world space
-#     using that affine (so they align with the segmentation).
-#     Returns a list of (points, lines, color, label).
-#     """
-#     pattern = str(vtp_dir / f"{base_id}*_graph.vtp")
-#     vtps = sorted(glob.glob(pattern))
-#     if not vtps:
-#         raise FileNotFoundError(f"No .vtp files found with pattern {pattern}")
-
-#     graphs = []
-#     # set to 0.0 to avoid shifting graphs away from the seg
-#     offset_step = 0.0
-
-#     for idx, vtp_path in enumerate(vtps):
-#         mesh = pv.read(vtp_path)
-#         points = mesh.points.copy()
-
-#         # If graph is in voxel coordinates, map to world using the seg affine
-#         if affine is not None:
-#             points = apply_affine(points, affine)
-
-#         # Optional: small offset if you want to separate multiple graphs
-#         if offset_step != 0.0:
-#             points = points + np.array([idx * offset_step, 0.0, 0.0])
-
-#         # PyVista line encoding: [n_points, i0, i1, n_points, j0, j1, ...]
-#         lines_raw = mesh.lines.reshape(-1, 3)
-#         lines = lines_raw[:, 1:]
-
-#         fname = os.path.basename(vtp_path).lower()
-#         if "ref" in fname or "gt" in fname:
-#             color = "red"
-#         elif "pred" in fname:
-#             color = "blue"
-#         else:
-#             color = "green"
-
-#         graphs.append((points, lines, color, os.path.basename(vtp_path)))
-#         print(f"Loaded graph from {vtp_path}")
-
-#     return graphs
-
-def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray = None):
+def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray = None, patch_size=(64, 64, 64)):
     """
     Load all .vtp graph files corresponding to base_id from vtp_dir.
 
     Returns a list of (points, lines, color, label, node_ids).
     """
-    pattern = str(vtp_dir / f"{base_id}*_graph.vtp")
+    pattern = str(vtp_dir / f"{base_id}_graph.vtp")
     vtps = sorted(glob.glob(pattern))
     if not vtps:
         raise FileNotFoundError(f"No .vtp files found with pattern {pattern}")
@@ -137,14 +91,18 @@ def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray =
     for idx, vtp_path in enumerate(vtps):
         mesh = pv.read(vtp_path)
         points = mesh.points.copy()
+        
+        points_voxel = points * np.array(patch_size)
 
         # optional: apply affine if points are in voxel space and you want world coords
         if affine is not None:
-            points = apply_affine(points, affine)
+            points_world = apply_affine(points_voxel, affine)
+        else:
+            points_world = points_voxel
 
         # small shift if you want to separate multiple graphs visually
         if offset_step != 0.0:
-            points = points + np.array([idx * offset_step, 0.0, 0.0])
+            points_world = points_world + np.array([idx * offset_step, 0.0, 0.0])
 
         lines_raw = mesh.lines.reshape(-1, 3)
         lines = lines_raw[:, 1:]
@@ -155,7 +113,7 @@ def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray =
         elif "node_id" in mesh.point_data:
             node_ids = np.array(mesh.point_data["node_id"])
         else:
-            node_ids = np.arange(points.shape[0])
+            node_ids = np.arange(points_world.shape[0])
 
         fname = os.path.basename(vtp_path).lower()
         if "ref" in fname or "gt" in fname:
@@ -165,7 +123,7 @@ def load_graph_data_for_sample(vtp_dir: Path, base_id: str, affine: np.ndarray =
         else:
             color = "green"
 
-        graphs.append((points, lines, color, os.path.basename(vtp_path), node_ids))
+        graphs.append((points_world, lines, color, os.path.basename(vtp_path), node_ids))
         print(f"Loaded graph from {vtp_path}")
 
     return graphs
@@ -259,12 +217,13 @@ def make_plotly_figure(graphs, seg_mesh=None, title: str = "", show_seg: bool = 
 
 
 
-def visualize_sample_from_raw_browser(raw_sample_path: str,
-                                      out_html: str = None,
-                                      show_seg: bool = True):
-    seg_path, vtp_dir, base_id = get_paths_from_raw(raw_sample_path)
+def visualize_sample_from_raw_browser(args, show_seg: bool = True):
+    seg_path, vtp_dir, base_id = get_paths_from_raw(args.raw_path)
 
-    print(f"Raw path: {raw_sample_path}")
+    out_html = args.out_html
+    patch_size = args.patch_size
+
+    print(f"Raw path: {args.raw_path}")
     print(f"Seg path (expected): {seg_path}")
     print(f"VTP directory: {vtp_dir}")
     print(f"Base id: {base_id}")
@@ -283,7 +242,7 @@ def visualize_sample_from_raw_browser(raw_sample_path: str,
     if not vtp_dir.exists():
         raise FileNotFoundError(f"VTP directory does not exist: {vtp_dir}")
 
-    graphs = load_graph_data_for_sample(vtp_dir, base_id, affine=affine)
+    graphs = load_graph_data_for_sample(vtp_dir, base_id, affine=affine, patch_size=patch_size)
 
     if out_html is None:
         out_html = Path(vtp_dir).parent / f"{base_id}_graphs.html"
@@ -321,8 +280,14 @@ if __name__ == "__main__":
         default=None,
         help="Output HTML path (optional). Default: <train>/<base_id>_graphs.html",
     )
+    parser.add_argument(
+        "--patch_size",
+        type=float,
+        default="64",
+        help="Patch shape, report only 1 dimension. If the volume is 64x64x64, use 64",
+    )
     args = parser.parse_args([
-        "--raw_path", "/data/scavone/syntheticMRI/patches/train/raw/sample_000010_12_data.nii.gz"
+        "--raw_path", "/data/scavone/syntheticMRI/patches/train/raw/sample_000003_1_data.nii.gz"
     ])
 
-    visualize_sample_from_raw_browser(args.raw_path, args.out_html)
+    visualize_sample_from_raw_browser(args)

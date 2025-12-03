@@ -27,7 +27,7 @@ class Discriminator(nn.Module):
                 modules.append(nn.Linear(h, out_size))
             else:
                 modules.append(nn.Linear(h, h))
-        modules.append(nn.LogSoftmax()) 
+        modules.append(nn.LogSoftmax(dim=1)) 
         self.net = nn.Sequential(*modules)
         self.out_size = out_size
 
