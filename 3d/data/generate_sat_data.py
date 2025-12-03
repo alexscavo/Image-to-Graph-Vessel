@@ -119,7 +119,7 @@ def save_input(path, idx, patch, patch_seg, patch_coord, patch_edge):
     mesh.save(path + 'vtp/sample_' + str(idx).zfill(6) + '_graph.vtp')
 
 
-def patch_extract(save_path, image, seg, mesh, split_name, max_patches_for_image=None, device=None):
+def patch_extract(save_path, image, seg, mesh, split_name, max_patches_for_image=None, device=None, overlap=0.48):
     """Extract patches from an image and save them, respecting per-split budgets.
 
     Args:
@@ -136,98 +136,119 @@ def patch_extract(save_path, image, seg, mesh, split_name, max_patches_for_image
     p_h, p_w, _ = patch_size
     pad_h, pad_w, _ = pad
 
+    # effective (unpadded) patch size
     p_h = p_h - 2 * pad_h
     p_w = p_w - 2 * pad_w
 
     h, w, d = image.shape
-    x_ = np.int32(np.linspace(5, h - 5 - p_h, 32))
-    y_ = np.int32(np.linspace(5, w - 5 - p_w, 32))
 
-    ind = np.meshgrid(x_, y_, indexing='ij')
+    # --- tunable overlap: stride from overlap in [0, 1) ---
+    # S is the effective patch size in each dimension
+    S_h = p_h
+    S_w = p_w
+
+    # stride = S * (1 - overlap), clamped to [1, S]
+    stride_h = int(round(S_h * (1.0 - float(overlap))))
+    stride_w = int(round(S_w * (1.0 - float(overlap))))
+
+    stride_h = max(1, min(stride_h, S_h))
+    stride_w = max(1, min(stride_w, S_w))
+
+    # starting coordinate offset used in your original code
+    margin = 5
+
+    start_y_list = list(range(margin, h - margin - p_h + 1, stride_h))
+    start_x_list = list(range(margin, w - margin - p_w + 1, stride_w))
+
+    # ensure last patch touches the end (like your linspace did)
+    last_y = h - margin - p_h
+    last_x = w - margin - p_w
+    if start_y_list[-1] != last_y:
+        start_y_list.append(last_y)
+    if start_x_list[-1] != last_x:
+        start_x_list.append(last_x)
 
     num_saved_from_image = 0
 
-    for i, start in enumerate(list(np.array(ind).reshape(2, -1).T)):
-        # Check global budget for this split
-        if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
-            return num_saved_from_image
+    for sy in start_y_list:
+        for sx in start_x_list:
+            # Global and per-image budget checks
+            if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
+                return num_saved_from_image
+            if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
+                return num_saved_from_image
 
-        # Check per-image budget
-        if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
-            return num_saved_from_image
+            start = np.array((sy, sx, 0))
+            end = start + np.array(patch_size) - 1 - 2 * np.array(pad)
 
-        start = np.array((start[0], start[1], 0))
-        end = start + np.array(patch_size) - 1 - 2 * np.array(pad)
+            patch = np.pad(
+                image[start[0]:start[0] + p_h, start[1]:start[1] + p_w, :],
+                ((pad_h, pad_h), (pad_w, pad_w), (0, 0))
+            )
+            patch_list = [patch]
 
-        patch = np.pad(
-            image[start[0]:start[0] + p_h, start[1]:start[1] + p_w, :],
-            ((pad_h, pad_h), (pad_w, pad_w), (0, 0))
-        )
-        patch_list = [patch]
+            patch_seg = np.pad(
+                seg[start[0]:start[0] + p_h, start[1]:start[1] + p_w],
+                ((pad_h, pad_h), (pad_w, pad_w))
+            )
+            seg_list = [patch_seg]
 
-        patch_seg = np.pad(
-            seg[start[0]:start[0] + p_h, start[1]:start[1] + p_w],
-            ((pad_h, pad_h), (pad_w, pad_w))
-        )
-        seg_list = [patch_seg]
+            input = torch.from_numpy(patch_seg).unsqueeze(0).unsqueeze(0).float() / 255.
 
-        input = torch.from_numpy(patch_seg).unsqueeze(0).unsqueeze(0).float() / 255.
+            weights = torch.tensor([[1., 1., 1.],
+                                    [1., 1., 1.],
+                                    [1., 1., 1.]])
+            weights = weights.view(1, 1, 3, 3).repeat(1, 1, 1, 1)
 
-        weights = torch.tensor([[1., 1., 1.],
-                                [1., 1., 1.],
-                                [1., 1., 1.]])
-        weights = weights.view(1, 1, 3, 3).repeat(1, 1, 1, 1)
+            x = conv2d(input, weight=weights, padding=1)
+            for _ in range(3):
+                x = conv2d(x, weight=weights, padding=1)
 
-        x = conv2d(input, weight=weights, padding=1)
-        for _ in range(3):
-            x = conv2d(x, weight=weights, padding=1)
+            aug_img = x[0][0]
+            aug_img[aug_img > 1] = 1
+            aug_img *= 255
+            patch_list = [aug_img.byte()]
 
-        aug_img = x[0][0]
-        aug_img[aug_img > 1] = 1
-        aug_img *= 255
-        patch_list = [aug_img.byte()]
+            bounds = [start[0], end[0], start[1], end[1], -0.5, 0.5]
+            clipped_mesh = mesh.clip_box(bounds, invert=False)
+            patch_coordinates = np.float32(np.asarray(clipped_mesh.points))
+            patch_edge = clipped_mesh.cells[np.sum(
+                clipped_mesh.celltypes == 1) * 2:].reshape(-1, 3)
 
-        bounds = [start[0], end[0], start[1], end[1], -0.5, 0.5]
-        clipped_mesh = mesh.clip_box(bounds, invert=False)
-        patch_coordinates = np.float32(np.asarray(clipped_mesh.points))
-        patch_edge = clipped_mesh.cells[np.sum(
-            clipped_mesh.celltypes == 1) * 2:].reshape(-1, 3)
+            patch_coord_ind = np.where(
+                (np.prod(patch_coordinates >= start, 1) * np.prod(patch_coordinates <= end, 1)) > 0.0)
+            patch_coordinates = patch_coordinates[patch_coord_ind[0], :]
+            patch_edge = [tuple(l) for l in patch_edge[:, 1:] if l[0]
+                        in patch_coord_ind[0] and l[1] in patch_coord_ind[0]]
 
-        patch_coord_ind = np.where(
-            (np.prod(patch_coordinates >= start, 1) * np.prod(patch_coordinates <= end, 1)) > 0.0)
-        patch_coordinates = patch_coordinates[patch_coord_ind[0], :]
-        patch_edge = [tuple(l) for l in patch_edge[:, 1:] if l[0]
-                      in patch_coord_ind[0] and l[1] in patch_coord_ind[0]]
+            temp = np.array(patch_edge).flatten()
+            temp = [np.where(patch_coord_ind[0] == ind_) for ind_ in temp]
+            patch_edge = np.array(temp).reshape(-1, 2)
 
-        temp = np.array(patch_edge).flatten()
-        temp = [np.where(patch_coord_ind[0] == ind_) for ind_ in temp]
-        patch_edge = np.array(temp).reshape(-1, 2)
+            if patch_coordinates.shape[0] < 2 or patch_edge.shape[0] < 1 or patch_coordinates.shape[0] > 80:
+                continue
 
-        if patch_coordinates.shape[0] < 2 or patch_edge.shape[0] < 1 or patch_coordinates.shape[0] > 80:
-            continue
+            patch_coordinates = (patch_coordinates - start + np.array(pad)) / np.array(patch_size)
+            patch_coord_list = [patch_coordinates]
+            patch_edge_list = [patch_edge]
 
-        patch_coordinates = (patch_coordinates - start + np.array(pad)) / np.array(patch_size)
-        patch_coord_list = [patch_coordinates]
-        patch_edge_list = [patch_edge]
+            mod_patch_coord_list, mod_patch_edge_list = prune_patch(
+                patch_coord_list, patch_edge_list)
 
-        mod_patch_coord_list, mod_patch_edge_list = prune_patch(
-            patch_coord_list, patch_edge_list)
+            for patch, patch_seg, patch_coord, patch_edge in zip(
+                    patch_list, seg_list, mod_patch_coord_list, mod_patch_edge_list):
+                if patch_seg.sum() > 10:
+                    # Re-check budgets just before saving
+                    if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
+                        return num_saved_from_image
 
-        for patch, patch_seg, patch_coord, patch_edge in zip(
-                patch_list, seg_list, mod_patch_coord_list, mod_patch_edge_list):
-            if patch_seg.sum() > 10:
-                # Re-check budgets just before saving
-                if patch_budget[split_name] is not None and patch_count[split_name] >= patch_budget[split_name]:
-                    return num_saved_from_image
+                    if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
+                        return num_saved_from_image
 
-                if max_patches_for_image is not None and num_saved_from_image >= max_patches_for_image:
-                    return num_saved_from_image
-
-                save_input(save_path, image_id, patch,
-                           patch_seg, patch_coord, patch_edge)
-                image_id = image_id + 1
-                patch_count[split_name] += 1
-                num_saved_from_image += 1
+                    save_input(save_path, image_id, patch, patch_seg, patch_coord, patch_edge)
+                    image_id = image_id + 1
+                    patch_count[split_name] += 1
+                    num_saved_from_image += 1
 
     return num_saved_from_image
 
@@ -330,6 +351,10 @@ parser.add_argument('--test_patches',
                     type=int,
                     required=True,
                     help='Target number of patches for test split')
+parser.add_argument('--overlap',
+                    type=float,
+                    default=0.5,
+                    help='Fractional overlap between adjacent patches in [0, 1). 0.0 = no overlap, 0.5 = 50% overlap, 0.9 = very dense grid.')
 
 image_id = 1
 
@@ -340,6 +365,7 @@ def generate_data(args):
     root_dir = args.source
     target_dir = args.target
     amount_images = args.source_number
+    overlap = args.overlap
 
     # If data has prefix with city names, a json with all names must be provided
     cities = []
@@ -449,7 +475,7 @@ def generate_data(args):
 
         patch_extract(train_path, sat_img, gt_seg, mesh,
                       split_name="train",
-                      max_patches_for_image=max_for_this_image)
+                      max_patches_for_image=max_for_this_image, overlap=overlap)
 
     # ------------------ VAL ------------------
     image_id = 1
@@ -501,7 +527,7 @@ def generate_data(args):
 
         patch_extract(val_path, sat_img, gt_seg, mesh,
                       split_name="val",
-                      max_patches_for_image=max_for_this_image)
+                      max_patches_for_image=max_for_this_image, overlap=overlap)
 
     # ------------------ TEST ------------------
     image_id = 1
@@ -554,7 +580,7 @@ def generate_data(args):
 
         patch_extract(test_path, sat_img, gt_seg, mesh,
                       split_name="test",
-                      max_patches_for_image=max_for_this_image)
+                      max_patches_for_image=max_for_this_image, overlap=overlap)
 
 
 if __name__ == "__main__":
