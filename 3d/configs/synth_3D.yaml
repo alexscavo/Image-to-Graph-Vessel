@@ -4,7 +4,7 @@ DATA:
     DATA_PATH: ""
     SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
     TARGET_DATA_PATH: "/data/scavone/syntheticMRI/patches"
-    NUM_SOURCE_SAMPLES: -1  # all
+    NUM_SOURCE_SAMPLES: 99200  # all
     NUM_TARGET_SAMPLES: 4000 # train + validation
     TEST_DATA_PATH: "/data/scavone/syntheticMRI/patches"
     DATASET: "synth_3d" # Dataset name

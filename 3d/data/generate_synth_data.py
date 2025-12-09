@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from utils.utils import split_reader_nifti
 
 patch_size = [64, 64, 64]
-pad = [2, 2, 2]
+pad = [5, 5, 5]
 
 
 # ---------- helpers for image + coordinates ----------
@@ -85,15 +85,19 @@ def save_input(save_path, idx, patch, patch_seg, patch_coord, patch_edge, num_sa
 def patch_extract(save_path, image, seg, gen, affine, image_id,
                   max_patches=None,
                   stride=None,
-                  overlap = 0.35,
+                  overlap=0.35,
                   device=None,
                   random_start=False,
                   random_offset=False,
                   seed=None):
-
     """
     Extract patches with a sliding window (from the corner) and
     bring graph node coordinates into patch-local voxel space.
+    
+    Args:
+        random_start: If True, start iterating from a random position in the grid
+        random_offset: If True, add random offset to grid origin (< stride)
+        seed: Random seed for reproducibility (mixed with image_id)
     """
 
     p_h, p_w, p_d = patch_size
@@ -106,12 +110,6 @@ def patch_extract(save_path, image, seg, gen, affine, image_id,
 
     h, w, d = image.shape
     
-    if seed is not None:
-        rng_seed = hash((seed, image_id)) & 0xFFFFFFFF
-        rng = np.random.default_rng(rng_seed)
-    else:
-        rng = np.random.default_rng()
-    
     if stride is None:
         eff_sizes = np.array([eff_h, eff_w, eff_d], dtype=float)
         strides = np.rint(eff_sizes * (1.0 - float(overlap))).astype(int)
@@ -119,7 +117,15 @@ def patch_extract(save_path, image, seg, gen, affine, image_id,
         s_h, s_w, s_d = strides
     else:
         s_h, s_w, s_d = stride
-        
+
+    # Initialize RNG for this image
+    if seed is not None:
+        rng_seed = hash((seed, image_id)) & 0xFFFFFFFF
+        rng = np.random.default_rng(rng_seed)
+    else:
+        rng = np.random.default_rng()
+
+    # Optional: random grid offset (smaller than stride)
     if random_offset:
         offset_h = rng.integers(0, s_h)
         offset_w = rng.integers(0, s_w)
@@ -127,7 +133,7 @@ def patch_extract(save_path, image, seg, gen, affine, image_id,
     else:
         offset_h = offset_w = offset_d = 0
 
-    # start from the corner (0, 0, 0) in voxel space
+    # Start positions with optional offset
     start_h_min = offset_h
     start_w_min = offset_w
     start_d_min = offset_d
@@ -137,257 +143,119 @@ def patch_extract(save_path, image, seg, gen, affine, image_id,
     start_w_max = w - eff_w
     start_d_max = d - eff_d
 
-    num_saved = 0
-    
+    # Build list of all valid positions
+    positions = []
+    for x in range(start_h_min, start_h_max + 1, s_h):
+        for y in range(start_w_min, start_w_max + 1, s_w):
+            for z in range(start_d_min, start_d_max + 1, s_d):
+                positions.append((x, y, z))
+
     if not positions:
-        positions = [(0, 0, 0)]
-        
+        positions = [(0, 0, 0)]  # fallback
+
+    # Optional: start from random position in the list
     if random_start:
         start_idx = rng.integers(0, len(positions))
     else:
         start_idx = 0
 
-    for x in range(start_h_min, start_h_max + 1, s_h):
-        for y in range(start_w_min, start_w_max + 1, s_w):
-            for z in range(start_d_min, start_d_max + 1, s_d):
+    num_saved = 0
 
-                if max_patches is not None and num_saved >= max_patches:
-                    return num_saved
+    # Iterate through positions starting from start_idx
+    for step in range(len(positions)):
+        if max_patches is not None and num_saved >= max_patches:
+            return num_saved
 
-                # voxel-space patch bounds (effective region, before padding)
-                start = np.array([x, y, z])
-                end = start + np.array([eff_h, eff_w, eff_d]) - 1
+        idx = (start_idx + step) % len(positions)
+        x, y, z = positions[idx]
 
-                # extract image & seg patch (voxel, then pad)
-                patch = np.pad(
-                    image[x:x + eff_h, y:y + eff_w, z:z + eff_d],
-                    ((pad_h, pad_h), (pad_w, pad_w), (pad_d, pad_d)),
-                )
-                patch_seg = np.pad(
-                    seg[x:x + eff_h, y:y + eff_w, z:z + eff_d],
-                    ((pad_h, pad_h), (pad_w, pad_w), (pad_d, pad_d)),
-                )
+        # voxel-space patch bounds (effective region, before padding)
+        start = np.array([x, y, z])
+        end = start + np.array([eff_h, eff_w, eff_d]) - 1
 
-                # Skip if bad SNR or too much/too little foreground
-                fg_pixels = patch[patch_seg > 0]
-                bg_pixels = patch[patch_seg == 0]
+        # extract image & seg patch (voxel, then pad)
+        patch = np.pad(
+            image[x:x + eff_h, y:y + eff_w, z:z + eff_d],
+            ((pad_h, pad_h), (pad_w, pad_w), (pad_d, pad_d)),
+        )
+        patch_seg = np.pad(
+            seg[x:x + eff_h, y:y + eff_w, z:z + eff_d],
+            ((pad_h, pad_h), (pad_w, pad_w), (pad_d, pad_d)),
+        )
 
-                if fg_pixels.size == 0 or bg_pixels.size == 0:
-                    continue
+        # Skip if bad SNR or too much/too little foreground
+        fg_pixels = patch[patch_seg > 0]
+        bg_pixels = patch[patch_seg == 0]
 
-                avg_intensity_fg = np.mean(fg_pixels)
-                avg_intensity_bg = np.mean(bg_pixels)
-                std_intensity_bg = np.std(bg_pixels) + 1e-8  # avoid /0
+        if fg_pixels.size == 0 or bg_pixels.size == 0:
+            continue
 
-                snr = (avg_intensity_fg - avg_intensity_bg) / std_intensity_bg
-                fgr = fg_pixels.size / patch.size
+        avg_intensity_fg = np.mean(fg_pixels)
+        avg_intensity_bg = np.mean(bg_pixels)
+        std_intensity_bg = np.std(bg_pixels) + 1e-8  # avoid /0
 
-                if snr < 1.2 or fgr > 0.5:
-                    print(f"skipping: {image_id}")
-                    continue
+        snr = (avg_intensity_fg - avg_intensity_bg) / std_intensity_bg
+        fgr = fg_pixels.size / patch.size
 
-                # ----- GRAPH PART -----
-                # convert voxel bounds -> world bounds for PatchGraphGenerator
-                corners_vox = np.stack([start, end], axis=0)      # (2, 3)
-                corners_world = voxel_to_world(corners_vox, affine)  # (2, 3)
+        if snr < 1.2 or fgr > 0.5:
+            # print(f"skipping: {image_id} (SNR={snr:.2f}, FGR={fgr:.2f})")
+            continue
 
-                bounds_world = np.array([
-                    [corners_world[0, 0], corners_world[1, 0]],
-                    [corners_world[0, 1], corners_world[1, 1]],
-                    [corners_world[0, 2], corners_world[1, 2]],
-                ])
-                
-                bounds_world = np.sort(bounds_world, axis=1)    # order the axis so that the min value is in the first col and the max in the second col
-                
-                gen.create_patch_graph(bounds_world)
-                
-                nodes, edges = gen.get_last_patch()
+        # ----- GRAPH PART -----
+        # convert voxel bounds -> world bounds for PatchGraphGenerator
+        corners_vox = np.stack([start, end], axis=0)      # (2, 3)
+        corners_world = voxel_to_world(corners_vox, affine)  # (2, 3)
 
-                if patch_seg.sum() <= 10 or len(nodes) < 3:
-                    continue
+        bounds_world = np.array([
+            [corners_world[0, 0], corners_world[1, 0]],
+            [corners_world[0, 1], corners_world[1, 1]],
+            [corners_world[0, 2], corners_world[1, 2]],
+        ])
+        
+        bounds_world = np.sort(bounds_world, axis=1)
+        
+        gen.create_patch_graph(bounds_world)
+        nodes, edges = gen.get_last_patch()
 
-                nodes = np.array(nodes)
+        if patch_seg.sum() <= 10 or len(nodes) < 3:
+            continue
 
-                # nodes are in world coords -> bring into voxel coords
-                coords_world = nodes[:, :3]
-                coords_vox = world_to_voxel(coords_world, affine)
+        nodes = np.array(nodes)
 
-                # convert voxel coords -> patch-local coords (0..~patch_size),
-                # accounting for padding
-                local_coords = coords_vox - start + np.array(
-                    [pad_h, pad_w, pad_d]
-                )
+        # nodes are in world coords -> bring into voxel coords
+        coords_world = nodes[:, :3]
+        coords_vox = world_to_voxel(coords_world, affine)
 
-                nodes[:, :3] = local_coords
-                
-                normalized_coords = local_coords / np.array([p_h, p_w, p_d])
+        # convert voxel coords -> patch-local coords (0..patch_size)
+        local_coords = coords_vox - start + np.array([pad_h, pad_w, pad_d])
 
-                # Verify they're in [0,1] range
-                if normalized_coords.min() < 0 or normalized_coords.max() > 1:
-                    print(f"WARNING: coords out of [0,1]: min={normalized_coords.min():.3f}, max={normalized_coords.max():.3f}")
+        # *** NORMALIZE TO [0,1] RELATIVE TO PATCH SIZE ***
+        normalized_coords = local_coords / np.array([p_h, p_w, p_d])
 
-                nodes[:, :3] = normalized_coords
+        # Safety check
+        if normalized_coords.min() < -0.01 or normalized_coords.max() > 1.01:
+            print(f"WARNING [{image_id}_{num_saved}]: coords out of bounds: "
+                  f"min={normalized_coords.min():.3f}, max={normalized_coords.max():.3f}")
+            continue
 
-                save_input(
-                    save_path,
-                    image_id,
-                    patch,
-                    patch_seg,
-                    nodes,
-                    np.array(edges),
-                    num_saved
-                )
-                num_saved += 1
+        nodes[:, :3] = normalized_coords
+
+        save_input(
+            save_path,
+            image_id,
+            patch,
+            patch_seg,
+            nodes,
+            np.array(edges),
+            num_saved
+        )
+        num_saved += 1
                 
     return num_saved
                 
-                
-# def main(args):
-    
-#     root_dir = Path(args.root)  # parent of raw/, seg/, graphs/
-#     overlap = float(args.overlap)
-
-#     raw_files = sorted((root_dir / "raw").glob("*.nii.gz"))
-#     seg_files = sorted((root_dir / "seg").glob("*.nii.gz"))
-#     graph_dirs = sorted((root_dir / "graphs").iterdir())
-    
-#     # simple function to extract just the name
-#     def id_from_nii(path: Path) -> str:
-#         # "1.nii.gz" -> "1"
-#         return path.stem.split(".")[0]
-    
-#     raw_map = {id_from_nii(f): f for f in raw_files}
-#     seg_map = {id_from_nii(f): f for f in seg_files}
-#     graph_map = {d.name: d for d in graph_dirs if d.is_dir()}
-
-#     # ----- TRAIN -----
-#     train_path = root_dir / "patches" / "train"
-#     if not train_path.is_dir():
-#         seg_path_train = train_path / "seg"
-#         vtp_path_train = train_path / "vtp"
-#         raw_path_train = train_path / "raw"
-        
-#         seg_path_train.mkdir(parents=True, exist_ok=True)
-#         vtp_path_train.mkdir(parents=True, exist_ok=True)
-#         raw_path_train.mkdir(parents=True, exist_ok=True)
-
-
-#     print("Preparing Train Data")
-#     for seg_file in tqdm(seg_files):
-
-#         file_id = id_from_nii(seg_file)
-#         # print("seg_file:", seg_file, "id:", file_id)
-        
-#         raw_file = raw_map.get(file_id)
-#         graph_dir = graph_map.get(file_id)
-        
-#         if raw_file is None or graph_dir is None:
-#             print(f"WARNING: missing raw or graph for id {file_id}, skipping.")
-#             continue
-        
-#         nodes_file       = graph_dir / "nodes.csv"
-#         edges_file       = graph_dir / "edges.csv"
-#         centerline_file  = graph_dir / "graph.vvg"
-
-#         # image with affine (nibabel)
-#         image_data, affine = load_image_and_affine(raw_file)
-#         image_data = np.int32(image_data)
-
-#         # seg with medpy
-#         seg_data, _ = load(seg_file)
-#         seg_data = np.int8(seg_data)
-
-#         threshold = (
-#             scipy.stats.median_abs_deviation(
-#                 image_data.flatten(), scale="normal"
-#             ) * 4 + np.median(image_data.flatten())
-#         )
-#         image_data[image_data > threshold] = threshold
-#         image_data = image_data / threshold
-
-#         gen = PatchGraphGenerator(
-#             str(nodes_file),
-#             str(edges_file),
-#             str(centerline_file),
-#             patch_mode="centerline",
-#         )
-
-#         patch_extract(
-#             train_path,
-#             image_data,
-#             seg_data,
-#             gen,
-#             affine,
-#             int(file_id),
-#             max_patches=3,
-#             overlap=overlap
-#         )
-
-#     # ----- TEST -----
-#     test_path = root_dir / "patches" / "test"
-
-#     seg_path_test = test_path / "seg"
-#     vtp_path_test = test_path / "vtp"
-#     raw_path_test = test_path / "raw"
-
-#     seg_path_test.mkdir(parents=True, exist_ok=True)
-#     vtp_path_test.mkdir(parents=True, exist_ok=True)
-#     raw_path_test.mkdir(parents=True, exist_ok=True)
-
-#     # split: first 21 segs -> train, rest -> test
-#     seg_files_test = seg_files[21:]
-
-#     print("Preparing Test Data")
-#     for seg_file in tqdm(seg_files_test):
-#         file_id = id_from_nii(seg_file)         # e.g. "23"
-
-#         raw_file = raw_map.get(file_id)
-#         graph_dir = graph_map.get(file_id)
-
-#         if raw_file is None or graph_dir is None:
-#             print(f"WARNING: missing raw or graph for id {file_id}, skipping.")
-#             continue
-
-#         nodes_file      = graph_dir / "nodes.csv"
-#         edges_file      = graph_dir / "edges.csv"
-#         centerline_file = graph_dir / "graph.vvg"
-
-#         # image with affine (nibabel)
-#         image_data, affine = load_image_and_affine(raw_file)
-#         image_data = np.int32(image_data)
-
-#         # seg with medpy
-#         seg_data, _ = load(seg_file)
-#         seg_data = np.int8(seg_data)
-
-#         threshold = (
-#             scipy.stats.median_abs_deviation(
-#                 image_data.flatten(), scale="normal"
-#             ) * 4
-#             + np.median(image_data.flatten())
-#         )
-#         image_data[image_data > threshold] = threshold
-#         image_data = image_data / threshold
-
-#         gen = PatchGraphGenerator(
-#             nodes_file,
-#             edges_file,
-#             centerline_file,
-#             patch_mode="centerline",
-#         )
-
-#         # NOTE: assumes patch_extract signature includes file_name/file_id
-#         patch_extract(
-#             test_path,
-#             image_data,
-#             seg_data,
-#             gen,
-#             affine,
-#             file_id,          # <-- replaces your old real_idx-based name
-#             max_patches=3,
-#             overlap=overlap,
-#         )
-
+            
+            
+            
 def main(args):
 
     root_dir = Path(args.root)
@@ -522,8 +390,10 @@ def main(args):
                 image_id=int(fid),
                 max_patches=this_quota,
                 overlap=overlap,
+                random_start=True,      # NEW
+                random_offset=True,     # NEW
+                seed=42,                # NEW: or get from args
             )
-
             written_sp += int(n_p)
             written_global += int(n_p)
 

@@ -592,6 +592,6 @@ if __name__ == "__main__":
         '--train_patches', '99200',
         '--val_patches', '24800',
         '--test_patches', '25000',
-        '--overlap', '0.35'
+        '--overlap', '0.50'
     ])
     generate_data(args)

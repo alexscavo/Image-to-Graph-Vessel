@@ -376,24 +376,24 @@ if __name__ == '__main__':
 
     # --- PRE-TRAINING ---
     
-    # args = parser.parse_args([
-    #     '--exp_name', 'pretraining_mixed_synth_1',
-    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
-    #     '--continuous',
-    #     '--display_prob', '0.001',
-    # ])
+    args = parser.parse_args([
+        '--exp_name', 'pretraining_mixed_synth_2',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
+        '--continuous',
+        '--display_prob', '0.001',
+    ])
     
     
     # --- FINETUNING ---
     
-    args = parser.parse_args([
-        '--exp_name', 'prova',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
-        '--no_strict_loading',
-        '--continuous',
-        '--display_prob', '0.0',
-    ])
+    # args = parser.parse_args([
+    #     '--exp_name', 'prova',
+    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+    #     '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
+    #     '--no_strict_loading',
+    #     '--continuous',
+    #     '--display_prob', '0.001',
+    # ])
     
 
     if args.parallel:

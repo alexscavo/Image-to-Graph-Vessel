@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 import time
 import torch
 import yaml
@@ -22,6 +23,9 @@ from utils.vis_debug_3d import DebugVisualizer3D
 from monai.data import DataLoader
 
 from utils.utils import image_graph_collate
+
+
+debug_use_gt_as_pred = False  # <<< set True just for this test
 
 
 class obj:
@@ -87,7 +91,7 @@ def main(args):
     metrics = tuple([COCOMetric(classes=['Node'], per_class=False, verbose=False)])
     iou_thresholds = get_unique_iou_thresholds(metrics)
     iou_mapping = get_indices_of_iou_for_each_metric(iou_thresholds, metrics)
-    box_evaluator = box_ap(box_iou_np, iou_thresholds, max_detections=100)
+    box_evaluator = box_ap(box_iou_np, iou_thresholds, max_detections=40)
     
     mean_smd = []
     node_ap_result = []
@@ -183,13 +187,49 @@ def main(args):
                 # connected_components = len(list(nx.connected_components(G2)))
                 # beta_pred = np.array([connected_components, len(G2.edges) + connected_components - len(G2.nodes)])
                 # beta_errors.append(2 * np.abs(beta_pred - beta_gt) / (beta_gt + beta_pred + 1e-10))
+                
+                
+
+                if debug_use_gt_as_pred:
+                    # Numpy everywhere, consistent with your code
+                    # Nodes
+                    pred_boxes_debug       = boxes                 # list with one (N,6) array
+                    pred_boxes_class_debug = boxes_class           # list with one (N,) array
+                    pred_boxes_score_debug = [np.ones_like(boxes_class[0], dtype=np.float32)]
+
+                    # Edges
+                    pred_edge_boxes_debug  = edge_boxes            # list with one (M,6) array
+                    pred_rels_class_debug  = edge_boxes_class      # list with one (M,) array
+                    pred_rels_score_debug  = [np.ones_like(edge_boxes_class[0], dtype=np.float32)]
+                else:
+                    # your real predictions
+                    pred_boxes_debug       = [out["pred_boxes"][sample_num]]
+                    pred_boxes_class_debug = [out["pred_boxes_class"][sample_num]]
+                    pred_boxes_score_debug = [out["pred_boxes_score"][sample_num]]
+
+                    pred_edge_boxes_debug  = pred_edge_boxes
+                    pred_rels_class_debug  = [out["pred_rels_class"][sample_num]]
+                    pred_rels_score_debug  = [out["pred_rels_score"][sample_num]]
 
                 # mean AP
-                node_ap = box_evaluator([out["pred_boxes"][sample_num]], [out["pred_boxes_class"][sample_num]], [out["pred_boxes_score"][sample_num]], boxes, boxes_class)
+                node_ap = box_evaluator(
+                    pred_boxes_debug,
+                    pred_boxes_class_debug,
+                    pred_boxes_score_debug,
+                    boxes,
+                    boxes_class
+                )
                 node_ap_result.extend(node_ap)
 
                 # mean AP
-                edge_ap = box_evaluator(pred_edge_boxes, [out["pred_rels_class"][sample_num]], [out["pred_rels_score"][sample_num]], edge_boxes, edge_boxes_class, convert_box=False)
+                edge_ap = box_evaluator(
+                    pred_edge_boxes_debug,
+                    pred_rels_class_debug,
+                    pred_rels_score_debug,
+                    edge_boxes,
+                    edge_boxes_class,
+                    convert_box=False
+                )
                 edge_ap_result.extend(edge_ap)
                 
                 # mean SMD            
@@ -242,6 +282,8 @@ def main(args):
                     
                     viz.start_epoch()
                     current_fold += 1
+                    
+                    print(f'fold_node_mAP: {folds_node_mAP[0]}')
 
 
     # print metrics
@@ -332,8 +374,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args([
         '--exp_name', 'prova',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/test_synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_1_20/models/checkpoint_key_metric=16.7374.pt',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_1_20/models/checkpoint_epoch=100.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples', '5000',
         '--eval',
