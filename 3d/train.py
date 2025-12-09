@@ -260,23 +260,28 @@ def main(rank=0, args=None):
             return (1 - (iter - num_warmup_iter) / num_after_warmup_iter) ** 0.9
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_polynomial)
 
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location='cpu')
-        if args.sspt:
-            checkpoint = {k: v for k,v in checkpoint["state_dict"].items() if k.startswith("momentum_encoder")}
-            #net.load_state_dict(checkpoint, strict=False)
-        else:
-            if args.ignore_backbone:
-                state_dict = net_wo_dist.decoder.state_dict()
-                checkpoint['net'] = {k: v for k, v in checkpoint['net'].items() if k in state_dict}
-            if args.load_only_decoder:
-                checkpoint['net'] = {k[8:]: v for k, v in checkpoint['net'].items() if k.startswith("decoder")}
-                net_wo_dist.decoder.load_state_dict(checkpoint['net'], strict=not args.ignore_backbone and not args.no_strict_loading)
+    try:
+        if args.resume:
+            checkpoint = torch.load(args.resume, map_location='cpu')
+            if args.sspt:
+                checkpoint = {k: v for k,v in checkpoint["state_dict"].items() if k.startswith("momentum_encoder")}
+                #net.load_state_dict(checkpoint, strict=False)
             else:
-                net_wo_dist.load_state_dict(checkpoint['net'], strict=not args.ignore_backbone and not args.no_strict_loading)
-            if args.restore_state:
-                optimizer.load_state_dict(checkpoint['optimizer'])
-                scheduler.load_state_dict(checkpoint['scheduler'])
+                if args.ignore_backbone:
+                    state_dict = net_wo_dist.decoder.state_dict()
+                    checkpoint['net'] = {k: v for k, v in checkpoint['net'].items() if k in state_dict}
+                if args.load_only_decoder:
+                    checkpoint['net'] = {k[8:]: v for k, v in checkpoint['net'].items() if k.startswith("decoder")}
+                    net_wo_dist.decoder.load_state_dict(checkpoint['net'], strict=not args.ignore_backbone and not args.no_strict_loading)
+                else:
+                    net_wo_dist.load_state_dict(checkpoint['net'], strict=not args.ignore_backbone and not args.no_strict_loading)
+                if args.restore_state:
+                    optimizer.load_state_dict(checkpoint['optimizer'])
+                    scheduler.load_state_dict(checkpoint['scheduler'])
+                    
+            print('Checkpoint loaded from %s' % args.resume)
+    except Exception as e:
+        print('Error in loading checkpoint:', e)
 
     writer = SummaryWriter(
         log_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (args.exp_name, config.DATA.SEED)),
@@ -370,13 +375,26 @@ if __name__ == '__main__':
     ########################################
 
     # --- PRE-TRAINING ---
+    
+    # args = parser.parse_args([
+    #     '--exp_name', 'pretraining_mixed_synth_1',
+    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
+    #     '--continuous',
+    #     '--display_prob', '0.001',
+    # ])
+    
+    
+    # --- FINETUNING ---
+    
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth_1',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
+        '--exp_name', 'prova',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
+        '--no_strict_loading',
         '--continuous',
-        '--display_prob', '1.0',
-        '--parallel'
+        '--display_prob', '0.0',
     ])
+    
 
     if args.parallel:
         with igdist.Parallel(backend='nccl', nproc_per_node=args.nproc_per_node) as parallel:

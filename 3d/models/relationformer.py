@@ -140,7 +140,7 @@ class RelationFormer(nn.Module):
         # coord_loc = self.bbox_embed(object_token).sigmoid()         # !!!!!!!!!!!!!!!!! scommentare
         pre = self.coord_embed(object_token)          # BEFORE sigmoid
         post = pre.sigmoid()                         # AFTER sigmoid
-        if random.random() < 0.1:  # ~10% chance
+        if random.random() < 0.01:  # ~10% chance
             print("\npre min/max:", pre.min().item(), pre.max().item())
             print("post min/max:", post.min().item(), post.max().item())
             q = torch.quantile(pre.flatten(), torch.tensor([0.01,0.5,0.99], device=pre.device))

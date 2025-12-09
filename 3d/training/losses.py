@@ -384,7 +384,7 @@ class SetCriterion(nn.Module):
             
             print("\n[MATCHER] batch stats")
             total_pos = 0
-            if random.random() < 0.1:
+            if random.random() < 0.01:
                 print(f"\n[4. INFERENCE RESULTS]")
                 N = 1  # number of samples you want to inspect
                 for i in range(min(N, len(indices))):

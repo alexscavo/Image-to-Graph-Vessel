@@ -229,7 +229,7 @@ def make_side_by_side_figure_from_nodes(
             )
 
     # Left: seg + GT
-    add_image_volume(row=1, col=1)      # <--- NEW
+    # add_image_volume(row=1, col=1)      # <--- NEW
     add_seg_mesh(row=1, col=1)
     add_graph(gt_nodes, gt_edges, "red", "GT", row=1, col=1)
 

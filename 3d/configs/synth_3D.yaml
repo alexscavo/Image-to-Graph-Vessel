@@ -5,11 +5,11 @@ DATA:
     SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
     TARGET_DATA_PATH: "/data/scavone/syntheticMRI/patches"
     NUM_SOURCE_SAMPLES: -1  # all
-    NUM_TARGET_SAMPLES: 5000 # train + validation
+    NUM_TARGET_SAMPLES: 4000 # train + validation
     TEST_DATA_PATH: "/data/scavone/syntheticMRI/patches"
-    DATASET: "mixed_synth_3d" # Dataset name
+    DATASET: "synth_3d" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
-    PAD_SIZE: [0, 0, 0]    # [5, 5, 5]
+    PAD_SIZE: [5, 5, 5]    # [5, 5, 5]
     GROWTH_RANGE: [5, 10]
     NUM_PATCH: 4 # no of patch from each volume
     INTERPOLATION: "bicubic" # Interpolation to resize image (random, bilinear, bicubic)
@@ -60,7 +60,7 @@ MODEL:
         DEC_N_POINTS: 4
         ENC_N_POINTS: 4
         TWO_STAGE: False
-        OBJ_TOKEN: 80
+        OBJ_TOKEN: 120
         RLN_TOKEN: 2
         DUMMY_TOKEN: 0
         RLN_ATTN: True
@@ -72,7 +72,7 @@ MODEL:
 
 TRAIN:
     START_EPOCH: 0
-    EPOCHS: 50
+    EPOCHS: 100
     WARMUP_EPOCHS: 1
     WEIGHT_DECAY: 0.0001
     BASE_LR: 0.00007 # 0.0001
@@ -105,7 +105,7 @@ TRAIN:
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
     SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 5 # validation interval
+    VAL_INTERVAL: 1 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss

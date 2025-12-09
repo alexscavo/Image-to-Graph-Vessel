@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import time
 import torch
 import yaml
@@ -17,26 +18,10 @@ from metrics.boxap import MeanSingleAP, box_ap, iou_filter, get_unique_iou_thres
 from metrics.box_ops_np import box_iou_np
 from metrics.coco import COCOMetric
 import networkx as nx
+from utils.vis_debug_3d import DebugVisualizer3D
 from monai.data import DataLoader
 
 from utils.utils import image_graph_collate
-
-parser = ArgumentParser()
-#TODO the same confg is used for all the models at the moment
-parser.add_argument('--config',
-                    default=None,
-                    help='config file (.yml) containing the hyper-parameters for training. '
-                         'If None, use the nnU-Net config.')
-parser.add_argument('--model',
-                    help='Paths to the checkpoints to use for inference separated by a space.')
-parser.add_argument('--device', default='cuda',
-                        help='device to use for training')
-parser.add_argument("--max_samples", default=0, help='On how many samples should the net be evaluated?', type=int)
-parser.add_argument('--eval', action='store_true', help='Apply evaluation of metrics')
-parser.add_argument('--seg', action='store_true', help='Use segs instead of raw images')
-parser.add_argument('--general_transformer', action='store_true', help='Run eval on general transformer')
-parser.add_argument('--no_strict_loading', default=False, action="store_true",
-                    help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
 
 
 class obj:
@@ -59,10 +44,11 @@ def main(args):
         print(config['log']['exp_name'])
     config = dict2obj(config)
     device = torch.device("cuda") if args.device=='cuda' else torch.device("cpu")
+    config.display_prob = args.display_prob
 
-    nifti_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
-    seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'seg')
-    vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'vtp')
+    nifti_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/raw')
+    seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/seg')
+    vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/vtp')
     nifti_files = []
     vtk_files = []
     seg_files = []
@@ -113,11 +99,22 @@ def main(args):
     folds_node_mAR = []
     folds_edge_mAP = []
     folds_edge_mAR = []
+    
+    out_dir = os.path.join(
+        f"/data/scavone/cross-dim_i2g_3d/visual di prova/{args.exp_name}",
+        "test_vis"
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    viz = DebugVisualizer3D(out_dir=out_dir, prob=config.display_prob)  # prob=1.0 since we handle prob here
+    viz.start_epoch()
 
     fold_size = int(len(dataset)/ 5)
-    print(len(dataset))
-    print(fold_size)
-    for idx, batchdata in tqdm(enumerate(loader)):
+    print('number of test samples:', len(dataset))
+    print('fold size:', fold_size)
+    
+    current_fold = 0
+    
+    for idx, batchdata in enumerate(tqdm(loader, desc="Batches", leave=True)):
         images, segs, nodes, edges, z_pos, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4], batchdata[5]
         
         # # inputs, targets = self.get_batch(batchdata, image_keys=IMAGE_KEYS, label_keys="label")
@@ -136,6 +133,19 @@ def main(args):
             h, out, _, _, _, _ = net(images.type(torch.FloatTensor).to(device), z_pos, domain_labels=domains)
 
         out = relation_infer(h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN, apply_nms=False)
+        
+        viz.maybe_save(
+            segs=segs,
+            images=images,
+            gt_nodes_list=nodes,
+            gt_edges_list=edges,
+            pred_nodes_list=out['pred_nodes'],
+            pred_edges_list=out['pred_rels'],
+            epoch=current_fold,
+            step=idx,
+            batch_index=0,
+            tag="train",
+        )
 
         if args.eval:
             for sample_num in range(images.shape[0]):
@@ -200,7 +210,7 @@ def main(args):
 
                 # Calculate mean metrics for each fold
                 if (idx * config.DATA.BATCH_SIZE + sample_num) % fold_size == (fold_size - 1):
-                    print("Calculating intermediate results")
+                    tqdm.write("Calculating intermediate results")
                     # accumulate AP score
                     node_metric_scores = {}
                     edge_metric_scores = {}
@@ -229,6 +239,10 @@ def main(args):
                     mean_smd = []
                     node_ap_result = []
                     edge_ap_result = []
+                    
+                    viz.start_epoch()
+                    current_fold += 1
+
 
     # print metrics
     smd = torch.tensor(folds_smd).mean()
@@ -283,8 +297,48 @@ def main(args):
 
     print(csv_header_string)
     print(csv_value_string)
+    
+    dest_path = Path(args.out_path) / args.exp_name
+    dest_path.mkdir(parents=True, exist_ok=True)
+    csv_file = dest_path / "results.csv"
+    
+    with open(csv_file, "w", encoding="utf-8") as f:
+        f.write(csv_header_string + "\n")
+        f.write(csv_value_string + "\n")
 
 
 if __name__ == '__main__':
-    args = parser.parse_args()
+    
+    parser = ArgumentParser()
+    #TODO the same confg is used for all the models at the moment
+    parser.add_argument('--config',
+                        default=None,
+                        help='config file (.yml) containing the hyper-parameters for training. '
+                            'If None, use the nnU-Net config.')
+    parser.add_argument('--model',
+                        help='Paths to the checkpoints to use for inference separated by a space.')
+    parser.add_argument('--device', default='cuda',
+                            help='device to use for training')
+    parser.add_argument("--max_samples", default=0, help='On how many samples should the net be evaluated?', type=int)
+    parser.add_argument('--eval', action='store_true', help='Apply evaluation of metrics')
+    parser.add_argument('--seg', action='store_true', help='Use segs instead of raw images')
+    parser.add_argument('--general_transformer', action='store_true', help='Run eval on general transformer')
+    parser.add_argument('--no_strict_loading', default=False, action="store_true",
+                        help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
+    parser.add_argument('--out_path', default=None, help="Where to save the computed metrics", required=True)
+    parser.add_argument('--exp_name', help='name of the experiment', type=str, required=True)
+    parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
+
+
+    args = parser.parse_args([
+        '--exp_name', 'prova',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/test_synth_3D.yaml',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_1_20/models/checkpoint_key_metric=16.7374.pt',
+        '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
+        '--max_samples', '5000',
+        '--eval',
+        '--no_strict_loading',
+        '--display_prob', '0.0018'
+    ])
+    
     main(args)

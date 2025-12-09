@@ -555,7 +555,7 @@ if __name__ == "__main__":
     args = ap.parse_args(['--root', '/data/scavone/syntheticMRI',
                           '--out_root', '/data/scavone/syntheticMRI/patches',
                           '--split', '/data/scavone/syntheticMRI/splits.csv',
-                          '--overlap', '0.35',
+                          '--overlap', '0.5',
                           '--num_train', '4000', 
                           '--num_val', '1000',
                           '--num_test', '5000']) 

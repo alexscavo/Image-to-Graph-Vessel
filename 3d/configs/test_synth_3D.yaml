@@ -1,13 +1,13 @@
 DATA:
     DIM: 3 # data dimension
-    BATCH_SIZE: 32 # 48 Batch size for a single GPU, could be overwritten by command line argument
+    BATCH_SIZE: 1 # 48 Batch size for a single GPU, could be overwritten by command line argument
     DATA_PATH: ""
     SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
     TARGET_DATA_PATH: "/data/scavone/syntheticMRI/patches"
     NUM_SOURCE_SAMPLES: -1  # all
     NUM_TARGET_SAMPLES: 4000 # train + validation
     TEST_DATA_PATH: "/data/scavone/syntheticMRI/patches"
-    DATASET: "mixed_synth_3d" # Dataset name
+    DATASET: "synth_3d" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
     PAD_SIZE: [5, 5, 5]    # [5, 5, 5]
     GROWTH_RANGE: [5, 10]
@@ -72,7 +72,7 @@ MODEL:
 
 TRAIN:
     START_EPOCH: 0
-    EPOCHS: 50
+    EPOCHS: 100
     WARMUP_EPOCHS: 1
     WEIGHT_DECAY: 0.0001
     BASE_LR: 0.00007 # 0.0001
@@ -89,7 +89,9 @@ TRAIN:
     GRAPH_ADVERSARIAL: True
     CONSISTENCY_REGULARIZATION: True
     ALPHA_COEFF: 1.0
-    
+
+    # EDGE_SAMPLING_MODE
+    EDGE_SAMPLING_MODE: "up"
     UPSAMPLE_TARGET_DOMAIN: False
 
     # LR scheduler
@@ -103,14 +105,13 @@ TRAIN:
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
     SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 5 # validation interval
+    VAL_INTERVAL: 10 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss
     LOSSES: ["boxes", "class", "cards", "nodes", "edges"]
     NUM_EDGE_SAMPLES: 9999
     EDGE_UPSAMPLING: True # Only combine True with NUM_EDGE_SAMPLES=9999
-    EDGE_SAMPLING_MODE: "up"
     EDGE_SAMPLE_RATIO: 0.15
     EDGE_SAMPLE_RATIO_INTERVAL: 0.02
     W_BBOX: 2.0

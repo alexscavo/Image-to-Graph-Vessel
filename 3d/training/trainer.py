@@ -207,7 +207,7 @@ class RelationformerTrainer(SupervisedTrainer):
 
         # ============= DIAGNOSTIC BLOCK START =============
         # 4. Check inference results
-        if random.random() < 0.1:
+        if random.random() < 0.01:
             print(f"\n[4. INFERENCE RESULTS]")
             N = 1  # number of samples you want to inspect
             for i in range(min(N, len(pred_nodes_list))):
@@ -471,7 +471,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         out_dir=out_dir,
         prob=config.display_prob,
         max_per_epoch=8,
-        show_seg=False,
+        show_seg=True,
     )
     
     trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: trainer.viz3d.start_epoch())

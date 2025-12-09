@@ -3,6 +3,7 @@ import numpy as np
 import networkx as nx
 from skimage import measure
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import torch
 from torchvision.transforms import Compose, Normalize
 
 def draw_graph_3d(nodes, edges, ax):
@@ -173,12 +174,9 @@ def create_sample_visual_2d(samples, number_samples=10):
         if i >= len(samples["segs"]):
             break
         if len(samples["segs"].shape) >= 5:
-            print(i)
-            print(samples["segs"][i].shape)
-            sample = samples["segs"][i,0,:,:,indices[i]]
-            print("here", sample.shape)
+            sample = samples["segs"][i, 0, :, :, indices[i]]
         else:
-            sample = samples["images"][i,0]
+            sample = samples["images"][i, 0]
         axs[i, 0].imshow(sample.clone().cpu().detach())
         axs[i, 1].imshow(sample.clone().cpu().detach())
 
@@ -205,5 +203,124 @@ inv_norm = Compose([
     ),
 ])
 
+def create_gradcam_overlay_2d(samples):
+    """
+    Build a single image: raw slice + Grad-CAM overlay for sample 0.
+    Returns [tensor] where tensor has shape [1, 3, H, W] for TensorBoardImageHandler.
 
+    This matches TensorBoardImageHandler's expectation:
+        show_outputs = output_transform(...)[index] -> [N, C, H, W]
+    """
 
+    # ---- if there is no Grad-CAM for this iteration, skip logging ----
+    if "gradcam" not in samples or samples["gradcam"] is None:
+        # output_transform must still be indexable; returning [None] means
+        # show_outputs = None and the handler will just skip plotting.
+        return [None]
+
+    # ------------------------------------------------------------------
+    # 1) Choose base volume: raw image if available, otherwise segs
+    # ------------------------------------------------------------------
+    if "image" in samples:
+        vol = samples["image"]      # expected [B, 1, H, W, D]
+    else:
+        vol = samples["segs"]       # fallback
+
+    cam = samples["gradcam"]
+
+    # Move tensors to numpy
+    if isinstance(vol, torch.Tensor):
+        vol_np = vol.detach().cpu().numpy()
+    else:
+        vol_np = np.asarray(vol)
+
+    if isinstance(cam, torch.Tensor):
+        cam = cam.detach().cpu().numpy()
+    cam = np.asarray(cam)
+
+    # ------------------------------------------------------------------
+    # 2) Prepare Grad-CAM array to be 3D (D, H, W) or (H, W, D)
+    # ------------------------------------------------------------------
+    while cam.ndim > 3 and cam.shape[0] == 1:
+        cam = cam[0]
+
+    if cam.ndim != 3:
+        # Unexpected shape, skip
+        return [None]
+
+    # ------------------------------------------------------------------
+    # 3) Choose slice index (same logic as your 2D visualizer)
+    # ------------------------------------------------------------------
+    if vol_np.ndim < 5:
+        # no depth dimension, can't overlay a slice
+        return [None]
+
+    # vol_np: [B, 1, H, W, D]
+    vol0 = vol_np[0]                  # [1, H, W, D]
+    depth = vol0.shape[-1]
+
+    z_pos_arr = np.array(samples["z_pos"])
+    indices = np.round(z_pos_arr * (depth - 1)).astype(int)
+
+    if np.ndim(indices) == 0:
+        idx0 = int(indices)
+    else:
+        idx0 = int(indices[0])
+
+    idx0 = max(0, min(depth - 1, idx0))  # clamp to valid range
+
+    # Base (raw) slice: [H, W]
+    base = vol0[0, :, :, idx0]
+
+    # ------------------------------------------------------------------
+    # 4) Corresponding Grad-CAM slice
+    # ------------------------------------------------------------------
+    if cam.shape[0] == depth:
+        # cam is [D, H, W]
+        cam_slice = cam[idx0]
+    elif cam.shape[-1] == depth:
+        # cam is [H, W, D]
+        cam_slice = cam[:, :, idx0]
+    else:
+        # fallback: treat first dim as depth
+        cam_slice = cam[idx0]
+
+    # ------------------------------------------------------------------
+    # 5) Normalize both to [0, 1]
+    # ------------------------------------------------------------------
+    base_min, base_max = base.min(), base.max()
+    if base_max > base_min:
+        base = (base - base_min) / (base_max - base_min)
+    else:
+        base = np.zeros_like(base, dtype=np.float32)
+
+    hm_min, hm_max = cam_slice.min(), cam_slice.max()
+    if hm_max > hm_min:
+        cam_slice = (cam_slice - hm_min) / (hm_max - hm_min)
+    else:
+        cam_slice = np.zeros_like(cam_slice, dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # 6) Create overlay figure (grayscale base + colored Grad-CAM)
+    # ------------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(4, 4))
+
+    # raw volume slice in grayscale
+    ax.imshow(base, cmap="gray")
+
+    # Grad-CAM in color, e.g. "jet" for typical red/yellow heatmap
+    ax.imshow(cam_slice, cmap="jet", alpha=0.4)
+
+    ax.axis("off")
+    fig.canvas.draw()
+
+    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close(fig)
+
+    # data: [H, W, 3] -> [1, 3, H, W]
+    chw = torch.from_numpy(data).permute(2, 0, 1).float() / 255.0
+    nchw = chw.unsqueeze(0)
+
+    # IMPORTANT: wrap in a list so handler's [index] picks this tensor
+    return [nchw]

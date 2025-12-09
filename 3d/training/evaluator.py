@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from monai.engines import SupervisedEvaluator
 from monai.handlers import StatsHandler, CheckpointSaver, TensorBoardStatsHandler, TensorBoardImageHandler
+from utils.modified_library_functions import TensorBoardImageHandlerWithTag
 
 from metrics.loss_metric import MeanLoss
 from metrics.smd import MeanSMD
@@ -19,7 +20,7 @@ from monai.inferers import Inferer, SimpleInferer
 from monai.transforms import Transform
 from monai.utils import ForwardMode, min_version, optional_import
 
-from visualize_sample import create_sample_visual_3d, create_sample_visual_2d
+from visualize_sample import create_sample_visual_3d, create_sample_visual_2d, create_gradcam_overlay_2d
 from metrics.similarity import SimilarityMetricPCA, SimilarityMetricTSNE, batch_cka, batch_cosine, batch_euclidean, create_feature_representation_visual
 from metrics.svcca import robust_cca_similarity
 
@@ -83,6 +84,24 @@ class RelationformerEvaluator(SupervisedEvaluator):
         self.loss_function = loss_function
         self.seg = seg
         
+        self.encoder_feats = None     # will store [B, C, D, H, W]
+
+        # ---- Grad-CAM hooks on encoder.layer4 ----
+        self._enc_acts = None   # [B, C, D, H, W]
+        self._enc_grads = None  # [B, C, D, H, W]
+
+        def _fwd_hook(module, inp, out):
+            # save activations
+            self._enc_acts = out
+
+        def _bwd_hook(module, grad_input, grad_output):
+            # grad_output[0] is dY/d(out)
+            self._enc_grads = grad_output[0]
+
+        # attach to last conv block of SE-ResNet
+        self.network.encoder.layer4.register_forward_hook(_fwd_hook)
+        self.network.encoder.layer4.register_full_backward_hook(_bwd_hook)
+        
     def _iteration(self, engine, batchdata):
         images, segs, nodes, edges, z_pos, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4], batchdata[5]
         
@@ -101,6 +120,46 @@ class RelationformerEvaluator(SupervisedEvaluator):
         else:
             h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images.type(torch.FloatTensor).to(engine.state.device), z_pos, domain_labels=domains)
 
+        # ---- Grad-CAM for sample 0, token with highest object logit ----
+        gradcam_vol = None
+        try:
+            logits = out["pred_logits"]          # [B, num_queries, 2]
+            obj_logits = logits[0, :, 1]         # object-class logit for sample 0
+            top_idx = torch.argmax(obj_logits)
+            y = obj_logits[top_idx]              # scalar target
+
+            self.network.zero_grad()
+            y.backward(retain_graph=True)
+
+            # encoder feature maps & gradients
+            A = self._enc_acts[0]    # [C, D', H', W']
+            G = self._enc_grads[0]   # [C, D', H', W']
+
+            # channel weights: global-average-pool gradients
+            weights = G.mean(dim=(1, 2, 3))      # [C]
+
+            # weighted sum of feature maps
+            cam = (weights.view(-1, 1, 1, 1) * A).sum(dim=0)   # [D', H', W']
+            cam = torch.relu(cam)
+
+            # upsample to full input size [D, H, W]
+            cam = cam.unsqueeze(0).unsqueeze(0)  # [1,1,D',H',W']
+            cam = torch.nn.functional.interpolate(
+                cam,
+                size=images.shape[2:],           # (D, H, W)
+                mode="trilinear",
+                align_corners=False,
+            )[0, 0]                              # [D, H, W]
+
+            # normalize 0–1
+            cam = cam - cam.min()
+            cam = cam / (cam.max() + 1e-8)
+
+            gradcam_vol = cam.detach().cpu()     # [D, H, W]
+        except Exception as e:
+            # if anything goes wrong, just skip Grad-CAM for this iteration
+            gradcam_vol = None
+
         with torch.no_grad():
             losses = self.loss_function(
                 h.clone().detach(),
@@ -112,6 +171,10 @@ class RelationformerEvaluator(SupervisedEvaluator):
 
         out = relation_infer(h.detach(), out, self.network, self.config.MODEL.DECODER.OBJ_TOKEN, self.config.MODEL.DECODER.RLN_TOKEN, apply_nms=False)
         
+        enc = self.encoder_feats
+        if enc is not None:
+            enc = enc.detach().cpu()   # [B, C, D, H, W]
+        
         if self.config.TRAIN.SAVE_VAL:
             root_path = os.path.join(self.config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (self.config.log.exp_name, self.config.DATA.SEED), 'val_samples')
             if not os.path.exists(root_path):
@@ -122,8 +185,8 @@ class RelationformerEvaluator(SupervisedEvaluator):
                 path = os.path.join(root_path, "pred_epoch_"+str(engine.state.epoch).zfill(3)+"_iteration_"+str(engine.state.iteration).zfill(5))
                 save_output(path, i, pred_node, pred_edge)
 
-        '''gc.collect()
-        torch.cuda.empty_cache()'''
+        gc.collect()
+        torch.cuda.empty_cache()
         
         return {
             **{
@@ -136,7 +199,8 @@ class RelationformerEvaluator(SupervisedEvaluator):
                 "loss": losses,
                 "segs": segs,
                 "z_pos": z_pos,
-                "src": srcs
+                "src": srcs,
+                "gradcam": gradcam_vol,
             },
             **out}
 
@@ -169,7 +233,7 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
             output_transform=lambda x: None,
             global_epoch_transform=lambda x: scheduler.last_epoch
         ),
-        TensorBoardImageHandler(
+        TensorBoardImageHandlerWithTag(
             writer,
             epoch_level=True,
             interval=1,
@@ -247,13 +311,24 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
                 base_metric=base_similarity
         )
     else:
+        # val_handlers.append(
+        #     TensorBoardImageHandlerWithTag(
+        #         writer,
+        #         epoch_level=True,
+        #         interval=1,
+        #         output_transform=create_gradcam_overlay_2d,
+        #         # index should be 0 (default), since we return [tensor] and want the first element
+        #         output_tag='output_gradcam'
+        #     )
+        # )
         val_handlers.append(
-            TensorBoardImageHandler(
+            TensorBoardImageHandlerWithTag(
                 writer,
                 epoch_level=True,
                 interval=1,
                 max_channels=3,
                 output_transform=lambda x: create_sample_visual_3d(x),
+                output_tag='output_predictions'
             )
         )
 

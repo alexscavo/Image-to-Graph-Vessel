@@ -591,6 +591,7 @@ if __name__ == "__main__":
         '--split_csv', '/data/scavone/20cities/splits.csv',
         '--train_patches', '99200',
         '--val_patches', '24800',
-        '--test_patches', '25000'
+        '--test_patches', '25000',
+        '--overlap', '0.35'
     ])
     generate_data(args)
