@@ -260,7 +260,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             patch_size=config.DATA.IMG_SIZE,
             normalize_image=255. if config.DATA.DATASET == "synth_3d" or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
             normalize_nodes=50. if config.DATA.DATASET == "real_vessels" or config.DATA.DATASET == "mixed_real_vessels"or config.DATA.DATASET == "mixed_real_vessels_octa"  else 1.,
-            augment=False,
+            augment=True,
             domain_classification=domain_classification
         )
         

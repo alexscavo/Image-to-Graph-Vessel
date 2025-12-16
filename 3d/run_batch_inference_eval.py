@@ -69,7 +69,7 @@ def main(args):
     loader = DataLoader(
         dataset,
         batch_size=config.DATA.BATCH_SIZE,
-        shuffle=False,
+        shuffle=True,
         num_workers=config.DATA.NUM_WORKERS,
         collate_fn=lambda x:
         image_graph_collate(x, gaussian_augment=config.DATA.MIXED),
@@ -81,9 +81,14 @@ def main(args):
         net = build_model(config).to(device)
     
     # print('Loading model from:', args.model)
-    checkpoint = torch.load(args.model, map_location='cpu')
+    checkpoint = torch.load(args.model, map_location=device)
     net.load_state_dict(checkpoint['net'], strict=not args.no_strict_loading)
     net.eval()  # Put the CNN in evaluation mode
+    
+    #check if params require grad
+    for name, param in net.named_parameters():
+        if param.requires_grad:
+            print(f"Param {name} requires grad")
     
     t_start = time.time()
     sinkhorn_distance = SinkhornDistance(eps=1e-7, max_iter=100)
@@ -172,6 +177,7 @@ def main(args):
                 else:
                     pred_edge_boxes = []
                     edge_boxes_class = []
+                    
                 # boxes_scores = [np.ones(boxes[0].shape[0])]
 
                 # Calculate betti numbers
@@ -186,9 +192,7 @@ def main(args):
                 # G2.add_edges_from([(e[0].item(), e[1].item()) for e in pred_edges])
                 # connected_components = len(list(nx.connected_components(G2)))
                 # beta_pred = np.array([connected_components, len(G2.edges) + connected_components - len(G2.nodes)])
-                # beta_errors.append(2 * np.abs(beta_pred - beta_gt) / (beta_gt + beta_pred + 1e-10))
-                
-                
+                # beta_errors.append(2 * np.abs(beta_pred - beta_gt) / (beta_gt + beta_pred + 1e-10))                
 
                 if debug_use_gt_as_pred:
                     # Numpy everywhere, consistent with your code
@@ -352,7 +356,7 @@ def main(args):
 if __name__ == '__main__':
     
     parser = ArgumentParser()
-    #TODO the same confg is used for all the models at the moment
+
     parser.add_argument('--config',
                         default=None,
                         help='config file (.yml) containing the hyper-parameters for training. '
@@ -373,14 +377,14 @@ if __name__ == '__main__':
 
 
     args = parser.parse_args([
-        '--exp_name', 'prova',
+        '--exp_name', 'finetuning_mixed_2',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_1_20/models/checkpoint_epoch=100.pt',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_2_20/models/checkpoint_epoch=100.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples', '5000',
         '--eval',
         '--no_strict_loading',
-        '--display_prob', '0.0018'
+        '--display_prob', '0.002'
     ])
     
     main(args)

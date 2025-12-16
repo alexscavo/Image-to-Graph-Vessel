@@ -115,6 +115,7 @@ def main(rank=0, args=None):
             continuous=args.continuous,
         )
         config.DATA.MIXED = True
+        
     elif config.DATA.DATASET == "road_dataset":
         train_ds, val_ds, sampler = build_road_network_data(
             config, 
@@ -127,6 +128,7 @@ def main(rank=0, args=None):
             continuous=args.continuous
         ) # type: ignore
         config.DATA.MIXED = False
+        
     elif config.DATA.DATASET == "synth_octa":
         train_ds, val_ds, sampler = build_octa_network_data(
             config, 
@@ -139,6 +141,7 @@ def main(rank=0, args=None):
             continuous=args.continuous
         ) # type: ignore
         config.DATA.MIXED = False
+        
     else:
         config.DATA.MIXED = False
         train_ds, val_ds, sampler = build_vessel_data(
@@ -200,6 +203,7 @@ def main(rank=0, args=None):
         net_wo_dist = net.module
 
     matcher = build_matcher(config, dims=2 if args.pretrain_general else 3)
+    
     if config.TRAIN.EDGE_SAMPLING_MODE == "none":
         edge_sampling_mode = EDGE_SAMPLING_MODE.NONE
     elif config.TRAIN.EDGE_SAMPLING_MODE == "up":
@@ -220,7 +224,7 @@ def main(rank=0, args=None):
         edge_sampling_mode=edge_sampling_mode,
         domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device)
     )
-    val_loss = SetCriterion(config, matcher, relation_embed, dims=2 if args.pretrain_general else 3, edge_sampling_mode=EDGE_SAMPLING_MODE.UP)  # prima era EDGE_SAMPLING_MODE.NONE
+    val_loss = SetCriterion(config, matcher, relation_embed, dims=2 if args.pretrain_general else 3, edge_sampling_mode=EDGE_SAMPLING_MODE.NONE)  # prima era EDGE_SAMPLING_MODE.NONE
 
     param_dicts = [
         {
@@ -377,22 +381,24 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth_2',
+        '--exp_name', 'pretraining_mixed_synth_3',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
         '--continuous',
         '--display_prob', '0.001',
+        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_3_20/models/checkpoint_epoch=35.pt',
+        '--restore_state',
     ])
     
     
     # --- FINETUNING ---
     
     # args = parser.parse_args([
-    #     '--exp_name', 'prova',
-    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-    #     '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
-    #     '--no_strict_loading',
-    #     '--continuous',
-    #     '--display_prob', '0.001',
+        # '--exp_name', 'finetuning_mixed_synth_3',
+        # '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_2_20/models/checkpoint_epoch=50.pt',
+        # '--no_strict_loading',
+        # '--continuous',
+        # '--display_prob', '0.001',
     # ])
     
 

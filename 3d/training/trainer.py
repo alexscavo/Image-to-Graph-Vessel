@@ -112,6 +112,31 @@ class RelationformerTrainer(SupervisedTrainer):
 
         epoch = engine.state.epoch
         iteration = engine.state.iteration
+        
+        if engine.state.iteration % engine.state.epoch_length == 1:
+            print("epoch", engine.state.epoch,
+                "iteration", engine.state.iteration,
+                "epoch_length", engine.state.epoch_length)
+            
+
+        # --- PROVARE
+        # global_iter = engine.state.iteration - 1  # 0-based global step
+        # epoch_len = engine.state.epoch_length
+        # total_iters = engine.state.max_epochs * epoch_len
+
+        # warm_epochs = getattr(self.config.TRAIN, "ALPHA_WARMUP_EPOCHS", 0)
+        # alpha_max = getattr(self.config.TRAIN, "ALPHA_MAX", self.alpha_coeff)
+
+        # warm_iters = warm_epochs * epoch_len
+
+        # if global_iter < warm_iters:
+        #     alpha = 0.0
+        # else:
+        #     # progress only over the post-warmup part
+        #     p = (global_iter - warm_iters) / float(max(total_iters - warm_iters, 1))
+        #     alpha = (2. / (1. + np.exp(-10 * p)) - 1) * alpha_max
+
+        
         p = float(iteration + epoch * engine.state.epoch_length) / engine.state.max_epochs / engine.state.epoch_length
         alpha = (2. / (1. + np.exp(-10 * p)) - 1) * self.alpha_coeff
 
@@ -336,7 +361,8 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         ValidationHandler(
             validator=evaluator,
             interval=config.TRAIN.VAL_INTERVAL,
-            epoch_level=True
+            epoch_level=True,
+            exec_at_start=True
         ),
         StatsHandler(
             tag_name="train_loss",

@@ -21,7 +21,7 @@ class Discriminator(nn.Module):
         self.h = h
         modules = [nn.Linear(in_size, h)]
         for i in range(layer - 1):
-            modules.append(nn.BatchNorm1d(h))
+            modules.append(nn.BatchNorm1d(h))       # instead of batchnorm1d try LayerNorm(h)
             modules.append(nn.ReLU(True))
             if i == layer-2:
                 modules.append(nn.Linear(h, out_size))

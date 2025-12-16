@@ -30,6 +30,7 @@ def build_mixed_data(config, mode='split', split=0.95, use_grayscale=False, debu
     num_samples_B = len(target_train_data)
 
     # Calculate the weights for each sample in each dataset
+    # TODO: if sample proportion remains ~ 99000 to 4000, this weighting possibly leads to high overfitting
     weights_A = torch.ones(num_samples_A)
     weights_B = torch.ones(num_samples_B) * (num_samples_A / num_samples_B)
 
