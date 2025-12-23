@@ -254,13 +254,12 @@ def patch_extract(save_path, image, seg, gen, affine, image_id,
     return num_saved
                 
             
-            
-            
 def main(args):
 
     root_dir = Path(args.root)
     out_root = Path(args.out_root)
     overlap = float(args.overlap)
+    max_patches_per_volume = args.max_patches_per_volume
 
     # ---- collect raw/seg/graph files ----
     raw_files = sorted((root_dir / "raw").glob("*.nii.gz"))
@@ -288,6 +287,13 @@ def main(args):
             continue
         buckets[sp].append(fid)
 
+    # Print split statistics
+    print("\n=== VOLUME DISTRIBUTION ===")
+    for sp in ("train", "val", "test"):
+        print(f"{sp.upper()}: {len(buckets[sp])} volumes")
+    print(f"TOTAL: {sum(len(v) for v in buckets.values())} volumes")
+    print("===========================\n")
+
     # ---- create output dirs per split ----
     out_roots = {}
     for sp in ("train", "val", "test"):
@@ -299,15 +305,19 @@ def main(args):
             d.mkdir(parents=True, exist_ok=True)
         out_roots[sp] = root_sp
 
-    # desired total patches per split (may be None → uncapped)
+    # desired total patches per split
     want = {
         "train": args.num_train,
         "val":   args.num_val,
         "test":  args.num_test,
     }
 
-    # simple progress print
-    print("Target patches:", want)
+    print("=== PATCH EXTRACTION PLAN ===")
+    print(f"Target patches: {want}")
+    print(f"Max patches per volume: {max_patches_per_volume if max_patches_per_volume else 'unlimited'}")
+    print(f"Overlap: {overlap * 100:.0f}%")
+    print("==============================\n")
+
     total_target = sum(v for v in want.values() if v is not None)
     written_global = 0
 
@@ -321,26 +331,38 @@ def main(args):
         root_sp = out_roots[sp]
         want_sp = want[sp] if want[sp] is not None else None
 
-        # compute per-image quota for this split
+        # Compute per-image quota for this split
         if want_sp is not None:
             n_img = len(ids)
-            per_img_quota = max(1, int(np.ceil(float(want_sp) / max(1, n_img))))
+            # Calculate ideal patches per volume
+            ideal_per_volume = int(np.ceil(float(want_sp) / max(1, n_img)))
+            
+            # Apply max_patches_per_volume limit if specified
+            if max_patches_per_volume is not None:
+                per_img_quota = min(ideal_per_volume, max_patches_per_volume)
+            else:
+                per_img_quota = ideal_per_volume
+                
+            print(f"\n{sp.upper()} split:")
+            print(f"  Volumes: {n_img}")
+            print(f"  Target patches: {want_sp}")
+            print(f"  Ideal per volume: {ideal_per_volume}")
+            print(f"  Actual per volume (after limit): {per_img_quota}")
+            print(f"  Expected total: {per_img_quota * n_img} patches")
         else:
-            per_img_quota = 3   # fallback: same as old max_patches
+            per_img_quota = max_patches_per_volume if max_patches_per_volume else 3
 
-        print(f"\nPreparing {sp} data (images={len(ids)}, per-image quota={per_img_quota})")
         written_sp = 0
+        patches_per_volume_list = []
 
         for fid in tqdm(ids, desc=f"{sp} volumes"):
-            if want_sp is not None and written_sp >= want_sp:
-                break
-
             raw_file  = raw_map.get(fid)
             seg_file  = seg_map.get(fid)
             graph_dir = graph_map.get(fid)
 
             if raw_file is None or seg_file is None or graph_dir is None:
                 print(f"[WARNING] missing raw/seg/graph for id {fid}, skipping.")
+                patches_per_volume_list.append(0)
                 continue
 
             nodes_file      = graph_dir / "nodes.csv"
@@ -371,7 +393,7 @@ def main(args):
                 patch_mode="centerline",
             )
 
-            # how many patches we are still allowed to write for this split
+            # Determine quota for this volume
             if want_sp is not None:
                 remaining = max(0, want_sp - written_sp)
                 this_quota = min(per_img_quota, remaining)
@@ -379,6 +401,7 @@ def main(args):
                 this_quota = per_img_quota
 
             if this_quota <= 0:
+                patches_per_volume_list.append(0)
                 break
 
             n_p = patch_extract(
@@ -390,10 +413,12 @@ def main(args):
                 image_id=int(fid),
                 max_patches=this_quota,
                 overlap=overlap,
-                random_start=True,      # NEW
-                random_offset=True,     # NEW
-                seed=42,                # NEW: or get from args
+                random_start=True,
+                random_offset=True,
+                seed=42,
             )
+            
+            patches_per_volume_list.append(int(n_p))
             written_sp += int(n_p)
             written_global += int(n_p)
 
@@ -402,40 +427,56 @@ def main(args):
 
             if total_target and written_global >= total_target:
                 print("\n[done] reached global target of patches.")
-                return
+                break
 
-    print(f"\n[done] wrote ~{written_global} patches in total.")
+        # Print statistics for this split
+        print(f"\n{sp.upper()} split statistics:")
+        print(f"  Total patches: {written_sp}")
+        print(f"  Volumes processed: {len([p for p in patches_per_volume_list if p > 0])}")
+        print(f"  Avg patches/volume: {np.mean([p for p in patches_per_volume_list if p > 0]):.1f}")
+        print(f"  Min patches/volume: {min([p for p in patches_per_volume_list if p > 0], default=0)}")
+        print(f"  Max patches/volume: {max(patches_per_volume_list, default=0)}")
 
-             
+        if total_target and written_global >= total_target:
+            break
+
+    print(f"\n{'='*50}")
+    print(f"EXTRACTION COMPLETE")
+    print(f"{'='*50}")
+    print(f"Total patches written: {written_global}")
+    print(f"Target was: {total_target if total_target else 'unlimited'}")
+    print(f"{'='*50}\n")
 
 
 # ---------- main ----------
 
 if __name__ == "__main__":
     
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True)
-    ap.add_argument("--out_root", required=True)
-    ap.add_argument("--overlap", type=float, default=0.3, required=True, help="Overlap between consecutive patches (fraction)")
+    ap = argparse.ArgumentParser(
+        description="Extract 3D patches from volumes with per-volume limits"
+    )
+    ap.add_argument("--root", required=True, help="Root directory containing raw/seg/graphs folders")
+    ap.add_argument("--out_root", required=True, help="Output directory for patches")
+    ap.add_argument("--overlap", type=float, required=True, help="Overlap between consecutive patches (fraction, e.g., 0.3)")
     ap.add_argument("--split", required=True, help="CSV file with columns: patient_id,split")
     ap.add_argument("--num_train", type=int, default=None, help="Target number of TRAIN patches (approx).")
     ap.add_argument("--num_val", type=int, default=None, help="Target number of VAL patches (approx).")
     ap.add_argument("--num_test", type=int, default=None, help="Target number of TEST patches (approx).")
+    ap.add_argument("--max_patches_per_volume", type=int, default=None, 
+                    help="Maximum patches to extract from each volume (ensures even distribution)")
     
-    args = ap.parse_args(['--root', '/data/scavone/syntheticMRI',
-                          '--out_root', '/data/scavone/syntheticMRI/patches',
-                          '--split', '/data/scavone/syntheticMRI/splits.csv',
-                          '--overlap', '0.5',
-                          '--num_train', '4000', 
-                          '--num_val', '1000',
-                          '--num_test', '5000']) 
+    # For your specific case: 136 volumes, 10k patches (4k train, 1k val, 5k test)
+    # Recommended: --max_patches_per_volume 100 (to ensure even distribution)
     
+    args = ap.parse_args([
+        '--root', '/data/scavone/syntheticMRI',
+        '--out_root', '/data/scavone/syntheticMRI/patches',
+        '--split', '/data/scavone/syntheticMRI/splits.csv',
+        '--overlap', '0.25',  # REDUCED from 0.5 to 0.3 (30% overlap)
+        '--num_train', '4000', 
+        '--num_val', '1000',
+        '--num_test', '5000',
+        '--max_patches_per_volume', '74',  # NEW: limit per volume
+    ]) 
     
     main(args)
-    
-    
-    
-    
-    
-
-    

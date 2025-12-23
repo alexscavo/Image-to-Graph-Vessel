@@ -4,7 +4,7 @@ import sys
 import torch
 from monai.data import Dataset
 from medpy.io import load
-from monai.transforms import Compose, Zoom, RandGaussianNoise, ScaleIntensity
+from monai.transforms import Compose, Zoom, RandGaussianNoise, ScaleIntensity, Lambda
 import pyvista
 import numpy as np
 import random
@@ -13,8 +13,9 @@ from utils.utils import rotate_image, rotate_coordinates
 
 train_transform = Compose(
     [
-        RandGaussianNoise(prob=0.2, std=0.015, mean=0),
-        ScaleIntensity(minv=-0.5, maxv=0.5),
+        RandGaussianNoise(prob=0.35, std=0.015, mean=0), # prob = 0.2
+        # ScaleIntensity(minv=-0.5, maxv=0.5),
+        Lambda(lambda x: x.clamp(-0.5, 0.5)),
     ]
 )
 val_transform = Compose([])
@@ -66,8 +67,10 @@ class vessel_loader(Dataset):
         """
         data = self.data[idx]
         image_data, _ = load(data['nifti'])
+        
         image_data = torch.tensor(image_data, dtype=torch.float).unsqueeze(0)
         image_data = image_data / self.normalize_image - 0.5
+        
         vtk_data = pyvista.read(data['vtp'])
         seg_data, _ = load(data['seg'])
         seg_data = torch.tensor(seg_data, dtype=torch.int).unsqueeze(0)-0.5
@@ -144,7 +147,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             data=data_dicts,
             transform=train_transform,
             patch_size=config.DATA.IMG_SIZE,
-            normalize_image=255. if config.DATA.DATASET == "synth_3d"  or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
+            normalize_image=1.0,
             normalize_nodes=50. if config.DATA.DATASET == "real_vessels" or config.DATA.DATASET == "mixed_real_vessels" or config.DATA.DATASET == "mixed_real_vessels_octa" else 1.,
             augment=False 
         )
@@ -182,7 +185,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             data=data_dicts,
             transform=None,
             patch_size=config.DATA.IMG_SIZE,
-            normalize_image=255. if config.DATA.DATASET == "synth_3d" or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
+            normalize_image=1.,
             normalize_nodes=50. if config.DATA.DATASET == "real_vessels" or config.DATA.DATASET == "mixed_real_vessels" or config.DATA.DATASET == "mixed_real_vessels_octa"  else 1.,
             augment=False,
         )
@@ -258,7 +261,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             data=train_files,
             transform=train_transform,
             patch_size=config.DATA.IMG_SIZE,
-            normalize_image=255. if config.DATA.DATASET == "synth_3d" or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
+            normalize_image=1.0,
             normalize_nodes=50. if config.DATA.DATASET == "real_vessels" or config.DATA.DATASET == "mixed_real_vessels"or config.DATA.DATASET == "mixed_real_vessels_octa"  else 1.,
             augment=True,
             domain_classification=domain_classification
@@ -268,7 +271,8 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             data=val_files,
             transform=val_transform,
             patch_size=config.DATA.IMG_SIZE,
-            normalize_image=255. if config.DATA.DATASET == "synth_3d"  or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
+            normalize_image=1.0,
+            # normalize_image=255. if config.DATA.DATASET == "synth_3d"  or config.DATA.DATASET == "mixed_synth_3d" or config.DATA.DATASET == "mixed_synth_3d_octa" else 1.,
             normalize_nodes=50. if config.DATA.DATASET == "real_vessels" or config.DATA.DATASET == "mixed_real_vessels" or config.DATA.DATASET == "mixed_real_vessels_octa" else 1.,
             augment=False,
             domain_classification=domain_classification

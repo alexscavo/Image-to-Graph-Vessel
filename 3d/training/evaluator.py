@@ -565,7 +565,7 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
 
     evaluator.viz3d = DebugVisualizer3D(
         out_dir=out_dir,
-        prob=config.display_prob,   # or 1.0 if you want always
+        prob=0.02,   # or 1.0 if you want always
         max_per_epoch=8,
         show_seg=True,
     )

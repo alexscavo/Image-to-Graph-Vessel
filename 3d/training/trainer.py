@@ -319,6 +319,7 @@ class RelationformerTrainer(SupervisedTrainer):
         # print(f"  Total loss: {losses['total']:.4f}")
         # print(f"{'='*70}\n")
         # ============= DIAGNOSTIC BLOCK END =============
+        
 
         losses['total'].backward()        
         self.optimizer.step()
@@ -362,7 +363,6 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
             validator=evaluator,
             interval=config.TRAIN.VAL_INTERVAL,
             epoch_level=True,
-            exec_at_start=True
         ),
         StatsHandler(
             tag_name="train_loss",

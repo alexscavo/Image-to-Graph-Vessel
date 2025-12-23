@@ -54,7 +54,7 @@ MODEL:
         ENC_LAYERS: 4
         DEC_LAYERS: 4
         DIM_FEEDFORWARD: 1280
-        DROPOUT: 0.1
+        DROPOUT: 0.0
         ACTIVATION: relu
         NUM_FEATURE_LEVELS: 1
         DEC_N_POINTS: 4
@@ -74,8 +74,8 @@ TRAIN:
     START_EPOCH: 0
     EPOCHS: 100
     WARMUP_EPOCHS: 1
-    WEIGHT_DECAY: 5e-4     # 0.0001
-    BASE_LR: 1e-5 # 0.00007 # 0.0001
+    WEIGHT_DECAY: 0.0001     # 0.0001
+    BASE_LR: 0.00007 # 0.00007 # 0.0001
     DOMAIN_LR: 0.00007
     WARMUP_LR: 0.000000001
     MIN_LR: 5e-6
@@ -105,7 +105,7 @@ TRAIN:
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
     SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 2 # validation interval
+    VAL_INTERVAL: 10 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss
