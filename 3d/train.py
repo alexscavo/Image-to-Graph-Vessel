@@ -248,7 +248,7 @@ def main(rank=0, args=None):
     if args.distributed:
         optimizer = igdist.auto_optim(optimizer)
 
-    # LR schedular
+    # LR scheduler
     iter_per_epoch = len(train_loader)
     num_warmup_epoch = float(config.TRAIN.WARMUP_EPOCHS)
     warm_lr_init = float(config.TRAIN.WARMUP_LR)
@@ -381,7 +381,7 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth_1',
+        '--exp_name', 'pretraining_mixed_synth_upsampled_2',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
         '--continuous',
         '--display_prob', '0.0005',
@@ -393,11 +393,11 @@ if __name__ == '__main__':
     # --- FINETUNING ---
     
     # args = parser.parse_args([
-    #     '--exp_name', 'finetuning_mixed_synth_4',
+    #     '--exp_name', 'finetuning_synth_1',
     #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-    #     '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_3_20/models/checkpoint_epoch=50.pt',
-    #     '--restore_state',
-    #     '--no_strict_loading',
+    #     # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
+    #     # '--restore_state',
+    #     # '--no_strict_loading',
     #     '--continuous',
     #     '--display_prob', '0.002',
     # ])

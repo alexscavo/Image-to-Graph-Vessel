@@ -136,9 +136,41 @@ class RelationformerTrainer(SupervisedTrainer):
         #     p = (global_iter - warm_iters) / float(max(total_iters - warm_iters, 1))
         #     alpha = (2. / (1. + np.exp(-10 * p)) - 1) * alpha_max
 
+        # SCOMMENTARE -- ORIGINALE
+        # p = float(iteration + epoch * engine.state.epoch_length) / engine.state.max_epochs / engine.state.epoch_length
+        # alpha = (2. / (1. + np.exp(-10 * p)) - 1) * self.alpha_coeff
+        # FINO A QUI
         
-        p = float(iteration + epoch * engine.state.epoch_length) / engine.state.max_epochs / engine.state.epoch_length
+        # DEBUG!!!
+        # trainer.py, inside _iteration method
+        # epoch = engine.state.epoch
+        # iteration = engine.state.iteration
+        # epoch_len = engine.state.epoch_length
+        # max_epochs = engine.state.max_epochs
+
+        # # Diagnostic print before calculation
+        # if iteration % 10 == 0:  # Print every 10 iterations to avoid flooding
+        #     print(f"\n--- Alpha Debug ---")
+        #     print(f"Current Epoch: {epoch}")
+        #     print(f"Global Iteration: {iteration}")
+        #     print(f"Epoch Length: {epoch_len}")
+        #     print(f"Max Epochs: {max_epochs}")
+        
+        total_iterations = engine.state.max_epochs * engine.state.epoch_length
+        p = float(engine.state.iteration) / total_iterations
         alpha = (2. / (1. + np.exp(-10 * p)) - 1) * self.alpha_coeff
+
+        # Diagnostic print after calculation
+        # if iteration % 10 == 0:
+        #     total_expected_iters = max_epochs * epoch_len
+        #     print(f"Calculated Progress (p): {p:.4f}")
+        #     print(f"Calculated Alpha: {alpha:.6f}")
+        #     print(f"Alpha Coeff Target: {self.alpha_coeff}")
+        #     if p > 1.0:
+        #         print(f"⚠️ WARNING: p > 1.0! Progress is overshooting.")
+        #     print(f"-------------------\n")
+        
+        # FINE DEBUG
 
         # ============= DIAGNOSTIC BLOCK START =============
         if debug_check:
@@ -331,7 +363,7 @@ class RelationformerTrainer(SupervisedTrainer):
         del target
         
         gc.collect()
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
         return {"src": srcs, "loss": losses, "domains": domains}
 
@@ -477,7 +509,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         key_train_metric=key_train_metric,
         additional_metrics=additional_metrics,
         alpha_coeff=config.TRAIN.ALPHA_COEFF,
-        # amp=fp16,
+        amp=fp16,   # uses operations with 16 bits precision for most operations, but for critical ones still 32 bits
     )
 
     out_dir = os.path.join(
