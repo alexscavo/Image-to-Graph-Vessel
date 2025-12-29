@@ -66,6 +66,7 @@ class RelationformerTrainer(SupervisedTrainer):
         optim_set_to_none: bool = False,
         seg: bool = False,
         alpha_coeff: float = 0.1,
+        ema_relation = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -94,6 +95,7 @@ class RelationformerTrainer(SupervisedTrainer):
         self.config = kwargs.pop('config')
         self.seg = seg
         self.alpha_coeff = alpha_coeff
+        self.ema_relation = ema_relation
 
     def _iteration(self, engine, batchdata):
         images, segs, nodes, edges, z_pos, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4], batchdata[5]
@@ -355,12 +357,6 @@ class RelationformerTrainer(SupervisedTrainer):
 
         losses['total'].backward()        
         self.optimizer.step()
-        
-        if self.ema_relation is not None:
-            # Update from the *actual* student relation head.
-            # self.network might be DDP-wrapped, so unwrap if needed.
-            student_net = self.network.module if hasattr(self.network, "module") else self.network
-            self.ema_relation.update(student_net.relation_embed)
 
         del images
         del segs
@@ -515,6 +511,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         key_train_metric=key_train_metric,
         additional_metrics=additional_metrics,
         alpha_coeff=config.TRAIN.ALPHA_COEFF,
+        ema_relation=ema_relation,
         amp=fp16,   # uses operations with 16 bits precision for most operations, but for critical ones still 32 bits
     )
 
