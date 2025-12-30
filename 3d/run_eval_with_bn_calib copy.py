@@ -514,9 +514,9 @@ if __name__ == "__main__":
     parser.add_argument("--display_prob", type=float, default=0.0018)
 
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth_1_calib_mixed',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
+        '--exp_name', 'finetuning_mixed_synth_upsampled_2_vessel_calib',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_upsampled_2_20/models/checkpoint_epoch=100.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples_test', '5000',
         '--max_samples_val', '1000',
@@ -524,7 +524,7 @@ if __name__ == "__main__":
         '--no_strict_loading',
         '--display_prob', '0.02',
         '--bn_calibrate',
-        '--mixed'
+        # '--mixed'
         # '--show_debug',
     ])
     

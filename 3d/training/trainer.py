@@ -355,12 +355,6 @@ class RelationformerTrainer(SupervisedTrainer):
 
         losses['total'].backward()        
         self.optimizer.step()
-        
-        if self.ema_relation is not None:
-            # Update from the *actual* student relation head.
-            # self.network might be DDP-wrapped, so unwrap if needed.
-            student_net = self.network.module if hasattr(self.network, "module") else self.network
-            self.ema_relation.update(student_net.relation_embed)
 
         del images
         del segs
@@ -375,7 +369,7 @@ class RelationformerTrainer(SupervisedTrainer):
 
 
 def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
-                  evaluator, config, device, fp16=False, seg=False, ema_relation=None):
+                  evaluator, config, device, fp16=False, seg=False):
     """[summary]
 
     Args:
@@ -409,7 +403,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         CheckpointSaver(
             save_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (config.log.exp_name, config.DATA.SEED),
                                   './models'),
-            save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler, "ema_relation": ema_relation.ema},
+            save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
             save_interval=5,
             n_saved=2,
             epoch_level=True,

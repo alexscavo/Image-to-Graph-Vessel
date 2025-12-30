@@ -112,8 +112,14 @@ class RelationformerTrainer(SupervisedTrainer):
         self.network.train()
         self.optimizer.zero_grad()
 
+        # engine.state.epoch and engine.state.iteration exist in Ignite/Monai
         epoch = engine.state.epoch
         iteration = engine.state.iteration
+        epoch_len = engine.state.epoch_length  # Monai sets this
+        max_epochs = self.max_epochs
+
+        if hasattr(self.loss_function, "set_hnm_progress"):
+            self.loss_function.set_hnm_progress(epoch, iteration, epoch_len, max_epochs)
         
         if engine.state.iteration % engine.state.epoch_length == 1:
             print("epoch", engine.state.epoch,
@@ -357,6 +363,12 @@ class RelationformerTrainer(SupervisedTrainer):
 
         losses['total'].backward()        
         self.optimizer.step()
+        
+        if self.ema_relation is not None:
+            # Update from the *actual* student relation head.
+            # self.network might be DDP-wrapped, so unwrap if needed.
+            student_net = self.network.module if hasattr(self.network, "module") else self.network
+            self.ema_relation.update(student_net.relation_embed)
 
         del images
         del segs
