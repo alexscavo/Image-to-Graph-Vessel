@@ -17,6 +17,7 @@ from monai.engines.utils import default_metric_cmp_fn, default_prepare_batch
 from monai.inferers import Inferer, SimpleInferer
 from monai.transforms import Transform
 from monai.utils import ForwardMode, min_version, optional_import
+
 if TYPE_CHECKING:
     from ignite.engine import EventEnum
     from ignite.metrics import Metric
@@ -26,6 +27,23 @@ else:
     EventEnum, _ = optional_import("ignite.engine", IgniteInfo.OPT_IMPORT_VERSION, min_version, "EventEnum")
 
 from data.visualize_sample import create_sample_visual
+
+import torch.nn as nn
+
+class LogitsOnly(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+    def forward(self, x):
+        _, out, _, _, _, _ = self.model(x, seg=False)  # seg=False avoids the copy_ path
+        return out["pred_logits"][..., 1].sum()
+
+class ScalarOutputTarget:
+    def __call__(self, model_output):
+        # model_output is already a scalar tensor
+        return model_output
+
+
 
 # Define customized evaluator
 class RelationformerEvaluator(SupervisedEvaluator):
@@ -50,6 +68,7 @@ class RelationformerEvaluator(SupervisedEvaluator):
         event_names: Optional[List[Union[str, EventEnum]]] = None,
         event_to_attr: Optional[dict] = None,
         decollate: bool = True,
+        writer=None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -75,6 +94,7 @@ class RelationformerEvaluator(SupervisedEvaluator):
 
         self.loss_function = loss_function
         self.config = kwargs.pop('config')
+        self.writer = writer
         
         
     def _iteration(self, engine, batchdata):
@@ -117,7 +137,18 @@ class RelationformerEvaluator(SupervisedEvaluator):
 
         gc.collect()
         torch.cuda.empty_cache()
-        return {"images": images, "src": srcs[-1], "domains": domains, "nodes": nodes, "edges": edges, "pred_nodes": pred_nodes, "pred_edges": pred_edges, "loss": losses}
+
+
+        return {
+            "images": images,
+            "src": srcs[-1],
+            "domains": domains,
+            "nodes": nodes,
+            "edges": edges,
+            "pred_nodes": pred_nodes,
+            "pred_edges": pred_edges,
+            "loss": losses,
+        }
 
 
 def build_evaluator(val_loader, net, loss, optimizer, scheduler, writer, config, device, early_stop_handler=None):
@@ -155,7 +186,7 @@ def build_evaluator(val_loader, net, loss, optimizer, scheduler, writer, config,
             key_metric_negative_sign=True,  # maximize metric
             key_metric_greater_or_equal=True,
             file_prefix="best",
-        ),
+        )
     ]
 
     additional_metrics={
@@ -210,6 +241,8 @@ def build_evaluator(val_loader, net, loss, optimizer, scheduler, writer, config,
             )
         )
 
+    
+
     # val_post_transform = Compose(
     #     [AsDiscreted(keys=("pred", "label"),
     #     argmax=(True, False),
@@ -232,7 +265,8 @@ def build_evaluator(val_loader, net, loss, optimizer, scheduler, writer, config,
         additional_metrics=additional_metrics,
         val_handlers=val_handlers,
         amp=False,
-        loss_function=loss
+        loss_function=loss,
+        writer=writer
     )
 
     """"val_cka_similarity": SimilarityMetric(

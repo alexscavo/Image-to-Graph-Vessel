@@ -629,9 +629,9 @@ if __name__ == "__main__":
                     help="Exact number of TEST patches to generate; overrides target_total for this split.")
     ap.add_argument("--split", default=None, required=True)
     
-    args = ap.parse_args(['--root', '/data/scavone/octa-synth-packed',
-                          '--out_root', '/data/scavone/octa-synth-packed/patches',
-                          '--split', '/data/scavone/octa-synth-packed/splits.csv',
+    args = ap.parse_args(['--root', 'C:/Users/Utente/Desktop/tesi/datasets/octa-synth',
+                          '--out_root', 'C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches',
+                          '--split', 'C:/Users/Utente/Desktop/tesi/datasets/octa-synth/splits.csv',
                           '--canvas_size', '1400',
                           '--overlap', '0.35',
                           '--num_train', '480',

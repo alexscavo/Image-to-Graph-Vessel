@@ -1,67 +1,148 @@
-# README
+# 2D Img-to-Graph Prediction 🕸️ ➜ 📈
 
-## Overview
-This repository provides a complete framework for training and evaluating **Image-to-Graph Transformers (RelationFormer)** in both **2D** and **3D**.  
-The model takes an input image or volume and predicts a graph structure composed of:
+Transform 2D images into graph structures with style, order, and the
+occasional questionable life choice.
 
-- **Nodes** – keypoints or anatomical/structural junctions  
-- **Edges** – connectivity between nodes  
+This repository guides you through the full pipeline: - dataset
+preparation
+- split creation
+- patch extraction
+- training
+- evaluation
+- inference
 
-The architecture is based on the ideas introduced in **“Cross-Domain and Cross-Dimension Learning for Image-to-Graph Transformers (WACV 2025)”**, extended with:
+Everything is designed to be intuitive, reproducible, and just chaotic
+enough to keep things interesting.
 
-- Mixed-domain training  
-- Domain-adversarial learning  
-- Optional segmentation supervision  
-- 2D and 3D unified pipelines  
-- Extensive visualization and debugging tools  
+------------------------------------------------------------------------
 
-Both pipelines are self-contained and include all modules needed for data loading, model definition, training, and evaluation.
+# 🚀 Quickstart Overview
 
-## Key Features
+1.  Create dataset splits
+2.  Extract patches
+3.  Train
+4.  Evaluate
+5.  Predict on new images
 
-### Image-to-Graph Transformer Architecture
-- Multi-scale CNN backbone  
-- Deformable DETR encoder/decoder  
-- Object tokens for node prediction  
-- Relation tokens for edge prediction    
+If you follow the numbered sections below, you're basically unstoppable.
 
-### Mixed-Domain Learning
-Optional adversarial modules include:
+------------------------------------------------------------------------
 
-- **Backbone domain discriminator**  
-- **Instance-level domain discriminator**  
-- **Grad-reverse scheduling**  
+# 0️⃣ Installation
 
-Useful when combining data from:
+I suggest to use uv for the package installation
 
-- Synthetic + real worlds  
-- Road networks + retinal vessels  
-- 2D OCTA + 3D angiography  
-- Multiple imaging modalities  
+``` bash
+git clone https://github.com/your-user/your-repo.git
+cd your-repo
 
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-## Installation
-```
-conda create -n relationformer python=3.10
-conda activate relationformer
 pip install -r requirements.txt
 ```
 
-## Running Experiments
+------------------------------------------------------------------------
 
-### 2D
-```
-cd 2d
-python train.py --config configs/config_2d.yaml --exp_name my_exp
+# 1️⃣ Create Train / Val / Test Splits 🧪
+
+Script location:
+
+    2d/preprocess/create_splits.py
+
+Modify the bottom of the script:
+
+``` python
+args = parser.parse_args([
+    '--root', "C:/Users/Utente/Desktop/tesi/datasets/octa-synth",
+    '--ratio',
+    '--train_patches_num', '480',
+    '--val_patches_num', '220',
+    '--test_patches_num', '2000',
+])
+
+main(args)
 ```
 
-### 3D
-```
-cd 3d
-python train.py --config configs/config_3d.yaml --exp_name my_exp
+Run:
+
+``` bash
+cd 2d/preprocess
+python create_split.py
 ```
 
-### Resume Training
+------------------------------------------------------------------------
+
+# 2️⃣ Extract Dataset Patches 🩹📦
+
+Extractors:
+
+- 2d/preprocess/patch_extractor_20cities.py
+- 2d/preprocess/patch_extractor_octasynth.py
+- 
+
+
+------------------------------------------------------------------------
+
+# 3️⃣ Train the Model 🧠
+
+``` bash
+python 2d/train_2d.py   --data_root path/to/dataset   --splits_file path/to/splits.json   --patches_root path/to/output_patches   --epochs 100   --batch_size 8   --lr 1e-4   --out_dir runs/exp_001
 ```
-python train.py --resume path/to/checkpoint.pt --restore_state
+
+------------------------------------------------------------------------
+
+# 4️⃣ Evaluate the Model 📊
+
+``` bash
+python 2d/eval_2d.py   --data_root path/to/dataset   --splits_file path/to/splits.json   --patches_root path/to/output_patches   --checkpoint runs/exp_001/best.ckpt
+```
+
+------------------------------------------------------------------------
+
+# 5️⃣ Predict on New Images 🔮
+
+``` bash
+python 2d/predict_2d.py   --checkpoint runs/exp_001/best.ckpt   --input_dir path/to/new/images   --output_dir predictions/
+```
+
+------------------------------------------------------------------------
+
+# 🗂 Project Structure
+
+    .
+    ├─ 2d/
+    │  ├─ preprocess/
+    │  │  ├─ create_split.py
+    │  │  ├─ patch_extractor_20cities.py
+    │  │  ├─ patch_extractor_octasynth.py
+    │  │  └─ ...
+    │  ├─ train_2d.py
+    │  ├─ eval_2d.py
+    │  ├─ predict_2d.py
+    │  └─ models/
+    ├─ configs/
+    ├─ runs/
+    ├─ datasets/
+    └─ README.md
+
+------------------------------------------------------------------------
+
+# 🧯 Troubleshooting
+
+-   Wrong dataset path → split script fails\
+-   Wrong extractor → patch folder empty\
+-   Missing patches → training refuses to start
+
+------------------------------------------------------------------------
+
+# 📚 Citation
+
+``` text
+@article{yourname2025img2graph,
+  title   = {2D Image-to-Graph Prediction for Something Very Important},
+  author  = {Your Name and Someone Else},
+  journal = {Some Journal},
+  year    = {2025}
+}
 ```

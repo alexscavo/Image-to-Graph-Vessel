@@ -355,17 +355,22 @@ if __name__ == '__main__':
     
     
     # --- PRE-TRAINING --- 
-    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth1',
-    #                           '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_synth.yaml',
+    # args = parser.parse_args(['--exp_name', 'pretraining_with_seg_mixed_synth1_final',
+    #                           '--config', 'C:/Users/Utente/Desktop/tesi/Image-to-Graph-Vessel/2d/configs/pretrained_config_2d_synth.yaml',
+    #                           '--display_prob', '0.001',
+    #                           '--resume', "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/pretraining_with_seg_mixed_synth1_continue_10/models/checkpoint_epoch=30.pt",
+    #                           '--restore_state',
+    #                           '--recover_optim'
     #                          ])
     
     
     # --- FINE TUNING ---
-    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_short',
-    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
-    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
-    #                         '--no_strict_loading'
-    #                         ])
+    args = parser.parse_args(['--exp_name', 'finetuning_with_seg_mixed_synth1_final',
+                            '--config', 'C:/Users/Utente/Desktop/tesi/Image-to-Graph-Vessel/2d/configs/config_2d_synth.yaml',
+                            '--resume', "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/pretraining_with_seg_mixed_synth1_final_10/models/checkpoint_epoch=50.pt",
+                            '--no_strict_loading',
+                            '--display_prob', '0.001',
+                            ])
     
     ########################################
     #############  OCTA 500 ################
@@ -378,11 +383,11 @@ if __name__ == '__main__':
     
     
     # --- FINE TUNING ---
-    args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
-                            '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
-                            '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
-                            '--no_strict_loading'
-                            ])
+    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
+    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
+    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+    #                         '--no_strict_loading'
+    #                         ])
 
     import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy('file_system')

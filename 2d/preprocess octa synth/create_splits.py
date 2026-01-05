@@ -138,7 +138,7 @@ if __name__ == "__main__":
     parser.add_argument('--output', default=None, help='output path of the file that will contain the splits')
     
     
-    args = parser.parse_args(['--root', "/data/scavone/octa-synth-packed",
+    args = parser.parse_args(['--root', "C:/Users/Utente/Desktop/tesi/datasets/octa-synth",
                               '--ratio',
                               '--train_patches_num', '480',
                               '--val_patches_num', '220',

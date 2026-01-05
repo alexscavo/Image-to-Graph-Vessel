@@ -16,6 +16,7 @@ from models.domain_adaptation.domain_classifier import Discriminator
 from .deformable_detr_backbone import build_backbone
 from .deformable_detr_2D import build_deforamble_transformer
 from .utils import nested_tensor_from_tensor_list, NestedTensor, inverse_sigmoid
+from .segmentation_head import SegHead2D
 
 class RelationFormer(nn.Module):
     """ This is the RelationFormer module that performs object detection """
@@ -38,6 +39,7 @@ class RelationFormer(nn.Module):
 
         self.class_embed = nn.Linear(config.MODEL.DECODER.HIDDEN_DIM, 2)
         self.bbox_embed = MLP(config.MODEL.DECODER.HIDDEN_DIM, config.MODEL.DECODER.HIDDEN_DIM, 4, 3)
+        self.segmentation_head = None
         
         if config.MODEL.DECODER.RLN_TOKEN > 0:
             self.relation_embed = MLP(
@@ -80,11 +82,33 @@ class RelationFormer(nn.Module):
         if config.DATA.MIXED:
             self.backbone_domain_discriminator = Discriminator(in_size=self.hidden_dim)
             self.instance_domain_discriminator = Discriminator(in_size=self.hidden_dim*self.num_queries)
+            
+            if self.config.MODEL.SEGMENTATION.ENABLED:
+                seg_cfg = self.config.MODEL.SEGMENTATION
 
+                self.segmentation_head = SegHead2D(
+                    in_ch=seg_cfg.IN_CHANS,          # e.g. 512
+                    mid_ch=seg_cfg.MID_CHANS,        # e.g. 64
+                    out_ch=seg_cfg.NUM_CLASSES       # e.g. 1 or K
+                )
+            else:
+                self.segmentation_head = None
+            
         self.decoder.decoder.bbox_embed = None
 
 
     def forward(self, samples, seg=True, alpha=1, domain_labels=None):
+        
+        pred_seg = None
+        # if domain_labels is None:
+        #     if isinstance(samples, torch.Tensor):
+        #         B = samples.shape[0]
+        #         dev = samples.device
+        #     else:
+        #         B = samples.tensors.shape[0]
+        #         dev = samples.tensors.device
+        #     domain_labels = torch.zeros(B, device=dev, dtype=torch.long)
+        
         if not seg and not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_tensor_list(samples)
         elif seg:
@@ -126,6 +150,14 @@ class RelationFormer(nn.Module):
             query_embeds = self.query_embed.weight
             
         if self.config.DATA.MIXED:
+            
+            # --- segmentation head ---
+            if self.segmentation_head is not None:
+                
+                seg_level = self.config.MODEL.SEGMENTATION.FROM_LEVEL
+                out_size = samples.tensors.shape[-2:]
+                pred_seg = self.segmentation_head(srcs[seg_level], out_size)
+            
             domain_features = []
             replicated_domain_labels = []
             # We have list of 2d features from each feature level where every level has the shape (batch_size, channels, height, width)
@@ -182,7 +214,7 @@ class RelationFormer(nn.Module):
         else:
             instance_domain_classifications = torch.tensor(-1)
         
-        out = {'pred_logits': class_prob, 'pred_nodes': coord_loc}
+        out = {'pred_logits': class_prob, 'pred_nodes': coord_loc, 'pred_seg': pred_seg}
         return hs, out, srcs, backbone_domain_classifications, instance_domain_classifications, conc_labels
 
 

@@ -3,13 +3,13 @@ DATA:
   BATCH_SIZE: 32 #16
   TEST_BATCH_SIZE: 128 #16
   DATA_PATH: "" # C:/Users/Utente/Desktop/tesi/cross-dim_i2g/data/octa-synth-packed
-  SOURCE_DATA_PATH: "/data/scavone/20cities/patches" # Not used for foinetuning
+  SOURCE_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches" # Not used for foinetuning
   NUM_SOURCE_SAMPLES: 0
   NUM_TARGET_SAMPLES: 0
-  TARGET_DATA_PATH: "/data/scavone/octa-synth-packed/patches"
+  TARGET_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches"
   UPSAMPLE_TARGET_DOMAIN: False
   COMPUTE_TARGET_GRAPH_LOSS: True
-  TEST_DATA_PATH: "/data/scavone/octa-synth-packed/patches/test"
+  TEST_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches/test"
   DATASET: "synthetic_eye_vessel_dataset" # Dataset name
   IMG_SIZE: [128, 128] # Input image size
   NUM_WORKERS: 4 # Number of data loading threads
@@ -62,8 +62,15 @@ MODEL:
     C_CLASS: 3
     C_NODE: 5
 
+  SEGMENTATION:
+    ENABLED: True
+    NUM_CLASSES: 1          # 1 for binary logits; use K for multi-class
+    IN_CHANS: 512           # must match encoder/decoder hidden dim
+    MID_CHANS: 64           # lightweight head width
+    FROM_LEVEL: 0           # use srcs[0] (highest-res projected feature map)
+
 TRAIN:
-  EPOCHS: 50   # 100 epochs is the original value
+  EPOCHS: 100   # 100 epochs is the original value
   LR: 2e-4
   LR_BACKBONE: 2e-5
   LR_DOMAIN: 2e-4
@@ -82,20 +89,20 @@ TRAIN:
   DOMAIN_WEIGHTING: [0.05, 0.95]
   UPSAMPLE_TARGET_DOMAIN: False
 
-
-  SAVE_PATH: "/data/scavone/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
+  SAVE_PATH: "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
   VAL_INTERVAL: 10 # validation interval, original 10
   SAVE_VAL: False # save validation data
   RECOVER_OPTIMIZER_STATE: False
 
   # loss weight
-  LOSSES: ["boxes", "class", "cards", "nodes", "edges", "domain"]
+  LOSSES: ["boxes", "class", "cards", "nodes", "edges", "domain", "seg"]
   W_BBOX: 2.0
   W_CLASS: 3.0
   W_CARD: 1.0
   W_NODE: 5.0
   W_EDGE: 5.0
   W_DOMAIN: 1.0
+  W_SEG: 0.1
 
 log:
   exp_name: "exp"

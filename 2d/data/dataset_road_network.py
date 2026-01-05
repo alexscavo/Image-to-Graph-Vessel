@@ -170,7 +170,7 @@ class Sat2GraphDataLoader(Dataset):
             seg_data = rotate(seg_data, angle)  
             nodes_norm = rotate_coordinates(nodes_norm, angle)         
         
-        return image_data, seg_data - 0.5, nodes_norm, lines, self.domain_classification
+        return image_data, seg_data, nodes_norm, lines, self.domain_classification
 
 
 # def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use_grayscale=False, domain_classification=-1, mixed=False):

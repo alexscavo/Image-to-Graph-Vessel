@@ -79,7 +79,7 @@ class Vessel2GraphDataLoader(Dataset):
             seg_data = rotate(seg_data, angle)
             nodes = rotate_coordinates(nodes, angle)
 
-        return image_data-0.5, seg_data-0.5, nodes, edges, self.domain_classification
+        return image_data-0.5, seg_data, nodes, edges, self.domain_classification
 
 
 def build_synthetic_vessel_network_data(config, mode='train', split=0.8, max_samples=0, use_grayscale=False, domain_classification=-1, mixed=False, has_val=False):

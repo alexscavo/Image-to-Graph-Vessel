@@ -1,4 +1,5 @@
 import enum
+import sys
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -85,6 +86,7 @@ class SetCriterion(nn.Module):
         self.edge_sampling_mode = edge_sampling_mode
         self.sample_ratio = config.TRAIN.EDGE_SAMPLE_RATIO
         self.sample_ratio_interval = config.TRAIN.EDGE_SAMPLE_RATIO_INTERVAL
+        self.exclude_target_seg = getattr(config.TRAIN, "EXCLUDE_TARGET_SEG", True)
         if config.DATA.MIXED:
             self.domain_img_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.IMAGE_ADVERSARIAL else None
             self.domain_inst_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.GRAPH_ADVERSARIAL else None
@@ -102,7 +104,8 @@ class SetCriterion(nn.Module):
                             'cards':config.TRAIN.W_CARD,
                             'nodes':config.TRAIN.W_NODE,
                             'edges':config.TRAIN.W_EDGE,
-                            'domain':config.TRAIN.W_DOMAIN
+                            'domain':config.TRAIN.W_DOMAIN,
+                            'seg': config.TRAIN.W_SEG
                             }
         
     def loss_class(self, outputs, indices):
@@ -329,6 +332,46 @@ class SetCriterion(nn.Module):
 
         return domain_loss
 
+    def loss_seg(self, pred_seg, target_seg, eps=1e-6):
+        """
+        pred_seg: [B, Cseg, H, W] (logits)
+        target_seg:
+        - binary: [B, 1, H, W] or [B, H, W] with {0,1}
+        - multiclass: [B, H, W] with {0..Cseg-1}
+        """
+        if pred_seg is None or pred_seg.numel() == 0:
+            return torch.tensor(0.0, device=target_seg.device)
+
+        target_seg = target_seg.to(pred_seg.device)
+
+        # binary case (Cseg == 1): BCEWithLogits
+        if pred_seg.shape[1] == 1:
+            if target_seg.dim() == 3:
+                target_seg = target_seg.unsqueeze(1)
+            target_seg = target_seg.float()
+
+            # compute pos_weight per batch
+            pos = target_seg.sum()
+            neg = target_seg.numel() - pos
+            pos_weight = (neg / (pos + eps)).clamp(1.0, 50.0)  # clamp to avoid crazy weights
+
+            return F.binary_cross_entropy_with_logits(
+                pred_seg, target_seg,
+                pos_weight=pos_weight
+            )
+
+        # multiclass case (Cseg > 1): CrossEntropy
+        else:
+            # target must be [B,H,W] long
+            if target_seg.dim() == 4 and target_seg.shape[1] == 1:
+                target_seg = target_seg[:, 0, ...]
+            target_seg = target_seg.long()
+            return F.cross_entropy(pred_seg, target_seg)
+    
+    
+    
+    
+    
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -342,45 +385,99 @@ class SetCriterion(nn.Module):
         return batch_idx, tgt_idx
 
     def forward(self, h, out, target, pred_backbone_domains, pred_instance_domains):
-        """ This performs the loss computation.
-        Parameters:
-             outputs: dict of tensors, see the output specification of the model for the format
-             targets: list of dicts, such that len(targets) == batch_size.
-                      The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        # Remove samples from out and target tensor where domain = 1 
+        Loss computation.
+        Segmentation loss is applied ONLY on source-domain samples (domain == 0).
+        """
+
+        device = h.device if hasattr(h, "device") else h.get_device()
+
+        # -------------------------------------------------
+        # SOURCE-ONLY FILTERING (domain == 0)
+        # -------------------------------------------------
+        keep = (target['domains'] == 0)
+
+        # Remove samples from out and target tensor where domain = 1
         if not self.compute_target_graph_loss:
-            out['pred_logits'] = out['pred_logits'][target['domains'] == 0]
-            out['pred_nodes'] = out['pred_nodes'][target['domains'] == 0]
-            target['nodes'] = [node_list for i, node_list in enumerate(target['nodes']) if target['domains'][i] == 0]
-            target['edges'] = [node_list for i, node_list in enumerate(target['edges']) if target['domains'][i] == 0]
-        
-        # When all samples have been removed - return 0 loss
+            out['pred_logits'] = out['pred_logits'][keep]
+            out['pred_nodes']  = out['pred_nodes'][keep]
+            target['nodes'] = [node_list for i, node_list in enumerate(target['nodes']) if keep[i]]
+            target['edges'] = [edge_list for i, edge_list in enumerate(target['edges']) if keep[i]]
+            # IMPORTANT: recompute keep after filtering so later code stays consistent
+            keep = torch.ones(len(target['nodes']), dtype=torch.bool, device=keep.device)
+
+
+        # -------------------------------------------------
+        # EARLY EXIT: no SOURCE samples
+        # -------------------------------------------------
         if len(target['nodes']) == 0:
+            z = torch.tensor(0.0, device=device)
             return {
-                'total':torch.tensor(0).to(h.get_device()),
-                'class':torch.tensor(0).to(h.get_device()),
-                'nodes':torch.tensor(0).to(h.get_device()),
-                'boxes':torch.tensor(0).to(h.get_device()),
-                'edges':torch.tensor(0).to(h.get_device()),
-                'cards':torch.tensor(0).to(h.get_device()),
-                'domain':torch.tensor(0).to(h.get_device())
+                'total': z,
+                'class': z,
+                'nodes': z,
+                'boxes': z,
+                'edges': z,
+                'cards': z,
+                'domain': z,
+                'seg': z,
             }
 
-        # Retrieve the matching between the outputs of the last layer and the targets
+        # -------------------------------------------------
+        # MATCHING
+        # -------------------------------------------------
         indices = self.matcher(out, target)
-        
+
+        # -------------------------------------------------
+        # STANDARD LOSSES (SOURCE ONLY)
+        # -------------------------------------------------
         losses = {}
         losses['class'] = self.loss_class(out['pred_logits'], indices)
-        losses['nodes'] = self.loss_nodes(out['pred_nodes'][...,:2], target['nodes'], indices)
+        losses['nodes'] = self.loss_nodes(out['pred_nodes'][..., :2], target['nodes'], indices)
         losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
         losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
         losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
+
         if self.domain_img_loss:
-            losses['domain'] = self.loss_domains(pred_backbone_domains, target['interpolated_domains'], pred_instance_domains, target['domains'])
+            losses['domain'] = self.loss_domains(
+                pred_backbone_domains,
+                target['interpolated_domains'],
+                pred_instance_domains,
+                target['domains']
+            )
         else:
-            losses['domain'] = -1
-        
-        losses['total'] = sum([losses[key]*self.weight_dict[key] for key in self.losses])
+            losses['domain'] = torch.tensor(0.0, device=device)
+
+        # -------------------------------------------------
+        # SEGMENTATION LOSS (SOURCE ONLY)
+        # -------------------------------------------------
+        # -------------------------------------------------
+        # SEGMENTATION LOSS
+        # -------------------------------------------------
+        pred_seg = out.get('pred_seg', None)
+        gt_seg   = target.get('seg', None)
+
+        if pred_seg is None or gt_seg is None:
+            losses['seg'] = torch.tensor(0.0, device=device)
+        else:
+            # If exclude_target_seg is enabled, compute seg loss only on original source samples
+            if self.exclude_target_seg:
+                # If we already filtered the batch (compute_target_graph_loss == False),
+                # then everything left is source and keep is all-True (see above).
+                if keep.any():
+                    losses['seg'] = self.loss_seg(pred_seg[keep], gt_seg[keep])
+                else:
+                    losses['seg'] = torch.tensor(0.0, device=device)
+            else:
+                # Use all segmentations (source + target)
+                losses['seg'] = self.loss_seg(pred_seg, gt_seg)
+
+        # -------------------------------------------------
+        # TOTAL
+        # -------------------------------------------------
+        losses['total'] = sum(
+            losses[k] * self.weight_dict[k]
+            for k in self.losses
+        )
 
         return losses

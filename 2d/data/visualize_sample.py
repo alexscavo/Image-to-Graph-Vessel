@@ -66,7 +66,6 @@ def create_sample_visual(samples, number_samples=10):
     return res
 
 
-
 inv_norm = Compose([
     Normalize(
         mean=[0., 0., 0.],

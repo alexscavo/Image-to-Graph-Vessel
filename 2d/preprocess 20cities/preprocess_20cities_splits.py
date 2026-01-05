@@ -712,9 +712,9 @@ if __name__ == "__main__":
     ap.add_argument("--num_test", type=int, default=None,
                     help="Exact number of TEST patches to generate; overrides total_patches for this split.")
 
-    args = ap.parse_args(['--root', '/data/scavone/20cities',
-                          '--out_root', '/data/scavone/20cities/patches',
-                          '--split', '/data/scavone/20cities/splits.csv',
+    args = ap.parse_args(['--root', 'C:/Users/Utente/Desktop/tesi/datasets/20cities',
+                          '--out_root', 'C:/Users/Utente/Desktop/tesi/datasets/20cities/patches',
+                          '--split', 'C:/Users/Utente/Desktop/tesi/datasets/20cities/splits.csv',
                           '--graph_format', 'both',
                           '--overlap', '0.35',
                           '--num_train', '99200',
