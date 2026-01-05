@@ -381,10 +381,10 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     # args = parser.parse_args([
-    #     '--exp_name', 'pretraining_mixed_synth_upsampled_2',
+    #     '--exp_name', 'prova',
     #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
     #     '--continuous',
-    #     '--display_prob', '0.0005',
+    #     '--display_prob', '0.0',
     #     # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_3_20/models/checkpoint_key_metric=7.2568.pt',
     #     # '--restore_state',
     # ])
@@ -393,11 +393,11 @@ if __name__ == '__main__':
     # --- FINETUNING ---
     
     args = parser.parse_args([
-        '--exp_name', 'finetuning_mixed_synth_upsampled_2',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_upsampled_2_20/models/checkpoint_epoch=50.pt',
-        # '--restore_state',
-        '--no_strict_loading',
+        '--exp_name', 'prova_strade',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
+        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=10.pt',
+        '--restore_state',
+        # '--no_strict_loading',
         '--continuous',
         '--display_prob', '0.002',
     ])

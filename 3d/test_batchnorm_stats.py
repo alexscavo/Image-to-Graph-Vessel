@@ -167,9 +167,194 @@ def bn_stats_diff(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> Dict[str,
 # --------------------------
 # Forward helpers + diffs
 # --------------------------
-def tensor_diff_stats(a: torch.Tensor, b: torch.Tensor) -> Dict[str, float]:
-    d = (a.detach() - b.detach()).abs()
-    return {"max_abs": float(d.max().item()), "mean_abs": float(d.mean().item())}
+import torch.nn.functional as F
+
+def _safe_rms(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    # returns a scalar tensor
+    x = x.float()
+    return torch.sqrt(torch.mean(x * x) + eps)
+
+@torch.no_grad()
+def tensor_diff_stats(a: torch.Tensor, b: torch.Tensor, *, eps: float = 1e-12) -> Dict[str, float]:
+    a = a.detach().float()
+    b = b.detach().float()
+    diff = a - b
+
+    rms = torch.sqrt(torch.mean(diff * diff) + eps)
+    ref = torch.sqrt(torch.mean(a * a) + eps)
+    rel_rms = rms / (ref + eps)
+
+    return {
+        "rel_rms": float(rel_rms.item()),
+        "max_abs": float(diff.abs().max().item()) if diff.numel() else 0.0,
+    }
+
+@torch.no_grad()
+def bn_mismatch_over_loader(
+    net: torch.nn.Module,
+    loader,
+    device,
+    use_seg: bool,
+    num_batches: int = 50,
+) -> Dict[str, Any]:
+    """
+    Returns per-layer mismatch summaries over several batches in BN-train mode (dropout OFF),
+    computed against the *current* running stats (so you can call this before and after calibration).
+    """
+    name_to_mod = dict(net.named_modules())
+    bn_names = [n for n, m in net.named_modules() if isinstance(m, _BatchNorm)]
+    if not bn_names:
+        return {"num_layers": 0, "per_layer": {}, "global": {}}
+
+    # accumulators: sum of mean_abs_z and var_ratio_mean across batches
+    acc = {n: {"sum_mean_abs_z": 0.0, "sum_var_ratio_mean": 0.0, "count": 0} for n in bn_names}
+
+    handles = []
+
+    def make_hook(name: str):
+        def fn(m: _BatchNorm, inp, out):
+            if m.running_mean is None or m.running_var is None:
+                return
+            t = inp[0].detach()
+            dims = [0] + list(range(2, t.ndim))
+            batch_mean = t.mean(dim=dims).float()
+            batch_var = t.var(dim=dims, unbiased=False).float()
+
+            rm = m.running_mean.detach().float().to(batch_mean.device)
+            rv = m.running_var.detach().float().to(batch_mean.device).clamp_min(m.eps)
+
+            z = (batch_mean - rm).abs() / torch.sqrt(rv + m.eps)          # (C,)
+            vr = batch_var / (rv + m.eps)                                 # (C,)
+
+            acc[name]["sum_mean_abs_z"] += float(z.mean().item())
+            acc[name]["sum_var_ratio_mean"] += float(vr.mean().item())
+            acc[name]["count"] += 1
+        return fn
+
+    for n in bn_names:
+        m = name_to_mod[n]
+        handles.append(m.register_forward_hook(make_hook(n)))
+
+    set_bn_train_dropout_eval(net)
+
+    n_seen = 0
+    for batch in loader:
+        images, segs, nodes, edges, z_pos, domains = batch
+        x = segs if use_seg else images
+        x = x.to(device).float()
+        domains = domains.to(device)
+        net(x, z_pos, domain_labels=domains)
+        n_seen += 1
+        if n_seen >= num_batches:
+            break
+
+    for h in handles:
+        h.remove()
+
+    # summarize
+    per_layer = {}
+    vals = []
+    for n in bn_names:
+        c = acc[n]["count"]
+        if c == 0:
+            continue
+        mean_abs_z = acc[n]["sum_mean_abs_z"] / c
+        var_ratio_mean = acc[n]["sum_var_ratio_mean"] / c
+        per_layer[n] = {"mean_abs_z": mean_abs_z, "var_ratio_mean": var_ratio_mean}
+        vals.append(mean_abs_z)
+
+    if len(vals) == 0:
+        global_sum = {}
+    else:
+        vt = torch.tensor(vals)
+        global_sum = {
+            "layers": len(vals),
+            "mean_layer_mean_abs_z": float(vt.mean().item()),
+            "p50_layer_mean_abs_z": float(torch.quantile(vt, 0.50).item()),
+            "p90_layer_mean_abs_z": float(torch.quantile(vt, 0.90).item()),
+            "max_layer_mean_abs_z": float(vt.max().item()),
+        }
+
+    # top offenders
+    top = sorted([(per_layer[n]["mean_abs_z"], n) for n in per_layer], reverse=True)[:10]
+
+    return {
+        "num_layers": len(bn_names),
+        "num_batches": n_seen,
+        "global": global_sum,
+        "top10_layers_by_mean_abs_z": top,
+        "per_layer": per_layer,
+    }
+
+def plot_bn_mismatch(before: Dict[str, Any], after: Optional[Dict[str, Any]], out_dir: str):
+    os.makedirs(out_dir, exist_ok=True)
+
+    def layer_vals(d):
+        pl = d.get("per_layer", {})
+        return [pl[k]["mean_abs_z"] for k in pl.keys()]
+
+    vb = layer_vals(before)
+    plt.figure()
+    plt.hist(vb, bins=30, alpha=0.7, label="before")
+    if after is not None:
+        va = layer_vals(after)
+        plt.hist(va, bins=30, alpha=0.5, label="after")
+    plt.title("BN mismatch per layer: mean_abs_z (lower is better)")
+    plt.xlabel("mean_abs_z per layer")
+    plt.ylabel("#layers")
+    plt.legend()
+    plt.savefig(os.path.join(out_dir, "bn_mismatch_hist.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # Top-10 bar (before vs after)
+    top_before = before.get("top10_layers_by_mean_abs_z", [])
+    names = [n for _, n in top_before]
+    vals_b = [v for v, _ in top_before]
+
+    plt.figure(figsize=(10, 4))
+    plt.bar(range(len(names)), vals_b, label="before")
+    if after is not None and "per_layer" in after:
+        vals_a = [after["per_layer"].get(n, {}).get("mean_abs_z", float("nan")) for n in names]
+        plt.bar(range(len(names)), vals_a, alpha=0.6, label="after")
+    plt.title("Top-10 BN layers by mismatch (mean_abs_z)")
+    plt.xlabel("Layer (top offenders before)")
+    plt.ylabel("mean_abs_z")
+    plt.xticks(range(len(names)), [str(i + 1) for i in range(len(names))])
+    plt.legend()
+    plt.savefig(os.path.join(out_dir, "bn_mismatch_top10.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+@torch.no_grad()
+def js_divergence_from_logits(logits_a: torch.Tensor, logits_b: torch.Tensor, eps: float = 1e-12) -> Dict[str, float]:
+    """
+    Jensen–Shannon divergence between softmax distributions.
+    Useful when logits shift but not necessarily by huge L2.
+    """
+    pa = torch.softmax(logits_a.float(), dim=-1).clamp_min(eps)
+    pb = torch.softmax(logits_b.float(), dim=-1).clamp_min(eps)
+    m = 0.5 * (pa + pb)
+
+    kl_a = torch.sum(pa * (pa.log() - m.log()), dim=-1)
+    kl_b = torch.sum(pb * (pb.log() - m.log()), dim=-1)
+    js = 0.5 * (kl_a + kl_b)
+
+    return {
+        "js_mean": float(js.mean().item()),
+        "js_p90": float(torch.quantile(js, 0.90).item()) if js.numel() else 0.0,
+        "js_max": float(js.max().item()) if js.numel() else 0.0,
+    }
+
+@torch.no_grad()
+def top1_flip_rate(logits_a: torch.Tensor, logits_b: torch.Tensor) -> float:
+    """
+    Fraction of samples where argmax changes.
+    If this is high, BN mode is changing decisions.
+    """
+    a1 = torch.argmax(logits_a, dim=-1)
+    b1 = torch.argmax(logits_b, dim=-1)
+    return float((a1 != b1).float().mean().item())
+
 
 @torch.no_grad()
 def forward_raw(net, x, z_pos, domains):
@@ -233,6 +418,30 @@ def capture_bn_batch_vs_running(
             dims = [0] + list(range(2, t.ndim))
             batch_mean = t.mean(dim=dims).detach().float().cpu()
             batch_var = t.var(dim=dims, unbiased=False).detach().float().cpu()
+            
+                        # Normalized mismatch: how far batch mean is from running mean in running-std units
+            if m.running_mean is not None and m.running_var is not None:
+                rm = m.running_mean.detach().float().cpu()
+                rv = m.running_var.detach().float().cpu().clamp_min(m.eps)
+                z = (batch_mean - rm).abs() / torch.sqrt(rv + m.eps)  # per-channel
+                # variance ratio: batch_var / running_var (per-channel)
+                vr = (batch_var / (rv + m.eps))
+
+                # worst channels (most mismatched)
+                topk = min(5, z.numel())
+                z_vals, z_idx = torch.topk(z, k=topk, largest=True)
+
+                mismatch = {
+                    "mean_abs_z": float(z.mean().item()),
+                    "p90_abs_z": float(torch.quantile(z, 0.90).item()) if z.numel() else 0.0,
+                    "max_abs_z": float(z.max().item()) if z.numel() else 0.0,
+                    "var_ratio_mean": float(vr.mean().item()),
+                    "var_ratio_p10": float(torch.quantile(vr, 0.10).item()) if vr.numel() else 0.0,
+                    "var_ratio_p90": float(torch.quantile(vr, 0.90).item()) if vr.numel() else 0.0,
+                    "worst_channels": [{"ch": int(i.item()), "abs_z": float(v.item())} for v, i in zip(z_vals, z_idx)],
+                }
+            else:
+                mismatch = None
 
             bn_batch_stats[name] = {
                 "batch_mean": {
@@ -259,8 +468,10 @@ def capture_bn_batch_vs_running(
                     "min": float(m.running_var.detach().float().cpu().min().item()) if m.running_var is not None else None,
                     "max": float(m.running_var.detach().float().cpu().max().item()) if m.running_var is not None else None,
                 },
+                "mismatch": mismatch,
                 "num_batches_tracked": int(m.num_batches_tracked.detach().cpu().item()) if hasattr(m, "num_batches_tracked") and m.num_batches_tracked is not None else None,
             }
+            
         return fn
 
     for ln in probe_layer_names:
@@ -325,6 +536,22 @@ def exp_mode_diffs_on_first_batch(
             "eval_vs_bnFrozen": tensor_diff_stats(out_e[k], out_bf[k]),
             "bnTrain_vs_bnFrozen": tensor_diff_stats(out_bt[k], out_bf[k]),
         }
+
+        # Extra diagnostics for logits
+        if k == "pred_logits":
+            diffs[k]["eval_vs_bnTrain"].update({
+                "js": js_divergence_from_logits(out_e[k], out_bt[k]),
+                "top1_flip_rate": top1_flip_rate(out_e[k], out_bt[k]),
+            })
+            diffs[k]["eval_vs_bnFrozen"].update({
+                "js": js_divergence_from_logits(out_e[k], out_bf[k]),
+                "top1_flip_rate": top1_flip_rate(out_e[k], out_bf[k]),
+            })
+            diffs[k]["bnTrain_vs_bnFrozen"].update({
+                "js": js_divergence_from_logits(out_bt[k], out_bf[k]),
+                "top1_flip_rate": top1_flip_rate(out_bt[k], out_bf[k]),
+            })
+
 
     out = {
         "compared_keys": keys,
@@ -511,7 +738,11 @@ def main(args):
 
         calib_loader = None
         if args.bn_calibrate:
-            calib_ds = build_vessel_data(config, mode=args.bn_calib_mode, debug=False, max_samples=args.bn_calib_max_samples)
+            
+            if args.bn_calib_mode == 'val':
+                train_ds, calib_ds, _ = build_vessel_data(config, mode='split', debug=False, max_samples=args.bn_calib_max_samples)
+            else:    
+                calib_ds = build_vessel_data(config, mode=args.bn_calib_mode, debug=False, max_samples=args.bn_calib_max_samples)
             calib_loader = DataLoader(
                 calib_ds,
                 batch_size=config.DATA.BATCH_SIZE,
@@ -565,6 +796,18 @@ def main(args):
     write_json(os.path.join(args.out_dir, "bn_stats_loaded.json"), bn0)
     print(f"[OK] Wrote BN snapshot: {os.path.join(args.out_dir, 'bn_stats_loaded.json')}")
     print(f"[Info] Found {len(bn0)} BatchNorm layers.")
+    
+    # NEW: BN mismatch score BEFORE calibration (over several batches)
+    bn_m_before = bn_mismatch_over_loader(
+        net, test_loader, device, args.seg, num_batches=min(50, args.bn_calib_batches)
+    )
+    write_json(os.path.join(args.out_dir, "bn_mismatch_before.json"), bn_m_before)
+    g = bn_m_before.get("global", {})
+    if g:
+        print(f"[BN mismatch BEFORE] mean={g['mean_layer_mean_abs_z']:.3f} "
+              f"p90={g['p90_layer_mean_abs_z']:.3f} max={g['max_layer_mean_abs_z']:.3f}")
+        print("[BN mismatch BEFORE] top10:", bn_m_before["top10_layers_by_mean_abs_z"][:5])
+
 
     # 2) Mode diffs on first batch (+ optional per-domain)
     if args.check_mode_diffs:
@@ -576,7 +819,7 @@ def main(args):
         for k, v in diffs0["diffs"].items():
             print(f"  {k}: eval_vs_bnTrain={v['eval_vs_bnTrain']} | eval_vs_bnFrozen={v['eval_vs_bnFrozen']}")
 
-        plot_mode_diffs(diffs0, args.out_dir, "mode_diffs_before_calib.png")
+        # plot_mode_diffs(diffs0, args.out_dir, "mode_diffs_before_calib.png")
 
     # 3) NEW: BN batch vs running stats on the same first batch
     if args.check_bn_batch_vs_running:
@@ -594,8 +837,16 @@ def main(args):
         print(f"[OK] Wrote BN batch-vs-running stats: {os.path.join(args.out_dir, 'bn_batch_vs_running_first_batch.json')}")
         print("[Peek] Probed BN layers:", probe_names)
         for name, st in bn_bvr.items():
-            print(f"  {name}: batch_mean.mean={st['batch_mean']['mean']:.4f} vs running_mean.mean={st['running_mean']['mean']:.4f} | "
-                  f"batch_var.mean={st['batch_var']['mean']:.4f} vs running_var.mean={st['running_var']['mean']:.4f}")
+            mm = st.get("mismatch", None)
+            if mm is None:
+                print(f"  {name}: (no running stats)")
+                continue
+            print(
+                f"  {name}: mean_abs_z={mm['mean_abs_z']:.3f} p90_abs_z={mm['p90_abs_z']:.3f} max_abs_z={mm['max_abs_z']:.3f} | "
+                f"var_ratio_mean={mm['var_ratio_mean']:.3f} (p10={mm['var_ratio_p10']:.3f}, p90={mm['var_ratio_p90']:.3f}) | "
+                f"worst={mm['worst_channels']}"
+            )
+
 
     # 4) Optional BN calibration
     bn1 = None
@@ -605,6 +856,19 @@ def main(args):
 
         bn1 = collect_bn_stats(net)
         write_json(os.path.join(args.out_dir, "bn_stats_after_calib.json"), bn1)
+        
+        bn_m_after = bn_mismatch_over_loader(
+            net, test_loader, device, args.seg, num_batches=min(50, args.bn_calib_batches)
+        )
+        write_json(os.path.join(args.out_dir, "bn_mismatch_after.json"), bn_m_after)
+        g = bn_m_after.get("global", {})
+        if g:
+            print(f"[BN mismatch AFTER ] mean={g['mean_layer_mean_abs_z']:.3f} "
+                  f"p90={g['p90_layer_mean_abs_z']:.3f} max={g['max_layer_mean_abs_z']:.3f}")
+
+        plot_bn_mismatch(bn_m_before, bn_m_after, args.out_dir)
+
+        
         diff = bn_stats_diff(bn0, bn1)
         write_json(os.path.join(args.out_dir, "bn_stats_delta_after_calib.json"), diff)
 
@@ -617,7 +881,7 @@ def main(args):
                 net, test_loader, device, args.seg, do_per_domain=args.per_domain_diffs
             )
             write_json(os.path.join(args.out_dir, "mode_diffs_after_calib.json"), diffs1)
-            plot_mode_diffs(diffs1, args.out_dir, "mode_diffs_after_calib.png")
+            # plot_mode_diffs(diffs1, args.out_dir, "mode_diffs_after_calib.png")
             print(f"[OK] Wrote mode diffs: {os.path.join(args.out_dir, 'mode_diffs_after_calib.json')}")
 
     # 5) Plots of BN distributions (loaded, and optionally after-calib overlay)
@@ -657,20 +921,20 @@ if __name__ == "__main__":
     p.add_argument("--bn_calib_batches", type=int, default=200)
     p.add_argument("--bn_calib_max_samples", type=int, default=0)
 
-    p.add_argument("--test_mode", type=str, default="mixed", choices=["mixed", "vessel"])
+    p.add_argument("--test_mode", type=str, default="vessel", choices=["mixed", "vessel"])
 
 
     args = p.parse_args([
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_upsampled_2_20/models/checkpoint_epoch=100.pt',
         '--out_dir', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples', '500',
         '--no_strict_loading',
         '--check_mode_diffs',
         '--bn_calibrate',
-        '--bn_calib_mode', 'train',
+        '--bn_calib_mode', 'val',
         '--bn_calib_batches', '200',
-        '--test_mode', 'mixed',
+        # '--test_mode', 'mixed',
         '--per_domain_diffs',
     ])
     main(args)

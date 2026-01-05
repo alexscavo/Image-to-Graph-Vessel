@@ -12,6 +12,7 @@ from monai.data import DataLoader
 import networkx as nx
 
 from data.dataset_vessel3d import build_vessel_data
+from data.dataset_road_network import build_road_network_data
 from data.dataset_mixed import build_mixed_data
 from models import build_model
 from training.inference import relation_infer
@@ -41,6 +42,70 @@ def set_dropout_eval(model: torch.nn.Module):
     for m in model.modules():
         if isinstance(m, torch.nn.Dropout) or "Dropout" in m.__class__.__name__:
             m.eval()
+
+
+
+
+def csize_to_minmax_np(boxes: np.ndarray, clip01: bool = True) -> np.ndarray:
+    """Convert center+size boxes to (min..., max...) corners.
+    Supports 2D (N,4) and 3D (N,6): [c..., s...] -> [min..., max...].
+    """
+    if boxes is None:
+        return boxes
+    boxes = np.asarray(boxes)
+    if boxes.size == 0:
+        return boxes
+    if boxes.ndim != 2 or boxes.shape[1] % 2 != 0:
+        raise ValueError(f"Expected boxes with shape [N,2*D], got {boxes.shape}")
+    D = boxes.shape[1] // 2
+    c = boxes[:, :D]
+    s = boxes[:, D:]
+    lo = c - 0.5 * s
+    hi = c + 0.5 * s
+    out = np.concatenate([lo, hi], axis=1)
+    if clip01:
+        out = np.clip(out, 0.0, 1.0)
+    return out
+
+
+
+def normalize_edge_scores(raw_scores, pred_edges: np.ndarray, n_pred_edges: int) -> np.ndarray:
+    """Return a 1D float array of length n_pred_edges aligned with pred_edges.
+    Handles common formats:
+      - (N,) already aligned
+      - (N,2) logits/probs -> take column 1
+      - (M,M) dense adjacency -> index by pred_edges
+    """
+    if n_pred_edges == 0:
+        return np.zeros((0,), dtype=np.float32)
+
+    scores = np.asarray(raw_scores)
+
+    # Dense adjacency matrix case
+    if scores.ndim == 2 and scores.shape[0] == scores.shape[1] and pred_edges is not None and pred_edges.size:
+        ij = np.asarray(pred_edges, dtype=np.int64)
+        if ij.ndim == 2 and ij.shape[1] == 2:
+            scores = scores[ij[:, 0], ij[:, 1]]
+
+    # Binary logits/probs case
+    if scores.ndim == 2 and scores.shape[1] == 2 and scores.shape[0] == n_pred_edges:
+        scores = scores[:, 1]
+
+    scores = scores.reshape(-1).astype(np.float32)
+
+    # Last-resort: truncate/pad to match
+    if scores.shape[0] != n_pred_edges:
+        if scores.shape[0] > n_pred_edges:
+            scores = scores[:n_pred_edges]
+        else:
+            scores = np.pad(scores, (0, n_pred_edges - scores.shape[0]), constant_values=0.0)
+
+
+    # If scores look like logits (outside [0,1]), squash to [0,1]
+    if scores.size and (scores.min() < 0.0 or scores.max() > 1.0):
+        scores = 1.0 / (1.0 + np.exp(-scores))
+
+    return scores
 
 
 @torch.no_grad()
@@ -80,16 +145,6 @@ def build_loader(dataset, config, shuffle: bool):
         pin_memory=True
     )
 
-def cwhd_to_xyzxyz(boxes, clip01=True):
-    # boxes: [N, 6] = [cx,cy,cz, sx,sy,sz]
-    c = boxes[:, :3]
-    s = boxes[:, 3:]
-    lo = c - 0.5 * s
-    hi = c + 0.5 * s
-    out = np.concatenate([lo, hi], axis=1)
-    if clip01:
-        out = np.clip(out, 0.0, 1.0)
-    return out  
 
 def evaluate_on_test(net, test_loader, config, device, args):
     """
@@ -173,14 +228,16 @@ def evaluate_on_test(net, test_loader, config, device, args):
                 sample_nodes = nodes[sample_num]
                 sample_edges = edges[sample_num]
 
-                # GT boxes for nodes
-                gt_boxes = [torch.cat([sample_nodes, 0.2*torch.ones(sample_nodes.shape, device=sample_nodes.device)], dim=-1).cpu().numpy()]
+                # GT boxes for nodes (center+size -> corners for box AP)
+                gt_boxes_csize = [torch.cat([sample_nodes, 0.2*torch.ones(sample_nodes.shape, device=sample_nodes.device)], dim=-1).cpu().numpy()]
+                gt_boxes = [csize_to_minmax_np(gt_boxes_csize[0])]
                 gt_boxes_class = [np.zeros(gt_boxes[0].shape[0])]
 
                 # GT boxes for edges
                 edge_boxes = torch.stack([sample_nodes[sample_edges[:, 0]], sample_nodes[sample_edges[:, 1]]], dim=2)
                 edge_boxes = torch.cat([torch.min(edge_boxes, dim=2)[0]-0.1, torch.max(edge_boxes, dim=2)[0]+0.1], dim=-1).cpu().numpy()
-                edge_boxes = [edge_boxes[:, [0, 1, 3, 4, 2, 5]]]
+                # edge_boxes = [edge_boxes[:, [0, 1, 3, 4, 2, 5]]]
+                edge_boxes = [np.clip(edge_boxes[:, [0, 1, 3, 4, 2, 5]], 0.0, 1.0)]  # xyxyzz + clip
                 edge_boxes_class = [np.zeros(sample_edges.shape[0])]
 
                 # Pred edge boxes
@@ -188,9 +245,11 @@ def evaluate_on_test(net, test_loader, config, device, args):
                     pred_edge_boxes = torch.stack([pred_nodes[pred_edges[:, 0]], pred_nodes[pred_edges[:, 1]]], dim=2)
                     pred_edge_boxes = torch.cat([torch.min(pred_edge_boxes, dim=2)[0]-0.1,
                                                  torch.max(pred_edge_boxes, dim=2)[0]+0.1], dim=-1).numpy()
-                    pred_edge_boxes = [pred_edge_boxes[:, [0, 1, 3, 4, 2, 5]]]
+                    # pred_edge_boxes = [pred_edge_boxes[:, [0, 1, 3, 4, 2, 5]]]
+                    pred_edge_boxes = [np.clip(pred_edge_boxes[:, [0, 1, 3, 4, 2, 5]], 0.0, 1.0)]  # xyxyzz + clip
+
                 else:
-                    pred_edge_boxes = []
+                    pred_edge_boxes = [np.zeros((0, 6), dtype=np.float32)]
 
                 if debug_use_gt_as_pred:
                     pred_boxes_debug       = gt_boxes
@@ -201,43 +260,46 @@ def evaluate_on_test(net, test_loader, config, device, args):
                     pred_rels_class_debug  = edge_boxes_class
                     pred_rels_score_debug  = [np.ones_like(edge_boxes_class[0], dtype=np.float32)]
                 else:
-                    pred_boxes_debug       = [out["pred_boxes"][sample_num]]
+                    pred_boxes_debug       = [csize_to_minmax_np(out["pred_boxes"][sample_num])]
                     pred_boxes_class_debug = [out["pred_boxes_class"][sample_num]]
                     pred_boxes_score_debug = [out["pred_boxes_score"][sample_num]]
 
                     pred_edge_boxes_debug  = pred_edge_boxes
-                    pred_rels_class_debug  = [out["pred_rels_class"][sample_num]]
-                    pred_rels_score_debug  = [out["pred_rels_score"][sample_num]]
-                  
+                    # Edge evaluation is single-class (GT is all zeros), so force pred classes to 0 too
+                    num_pred_edges = 0 if len(pred_edge_boxes_debug) == 0 else pred_edge_boxes_debug[0].shape[0]
+                    pred_rels_class_debug = [np.zeros((num_pred_edges,), dtype=np.int64)]
+                    pred_rels_score_debug = [normalize_edge_scores(out["pred_rels_score"][sample_num], pred_edges.cpu().numpy(), num_pred_edges)]
                     
-                # ---- GT (list of numpy arrays) ----
-                gt_boxes_cat = np.concatenate(gt_boxes, axis=0)   # [N, D]
-                
-                print('-'*50)
-                print("GT first 3 boxes raw:\n", gt_boxes_cat[:3])
-                
+                    # Minimal debug (first batch, first two samples) to verify edge eval alignment
+                    if args.show_debug and idx == 0 and sample_num < 2:
+                        print("-" * 50)
+                        print("GT edges:", edge_boxes[0].shape, "Pred edges:", pred_edge_boxes_debug[0].shape,
+                        "unique pred edge classes:", np.unique(pred_rels_class_debug[0]))
+                        print(f"DEBUG sample={sample_num} | GT nodes={gt_boxes[0].shape[0]} Pred nodes={pred_boxes_debug[0].shape[0]} | "
+                            f"GT edges={edge_boxes[0].shape[0]} Pred edges={pred_edge_boxes_debug[0].shape[0]}")
+                        gt_boxes_cat = np.concatenate(gt_boxes, axis=0)   # [N, D]
+                        D = gt_boxes_cat.shape[1]
+                        mid = D // 2
 
-                D = gt_boxes_cat.shape[1]
-                mid = D // 2
+                        gt_whd = gt_boxes_cat[:, mid:] - gt_boxes_cat[:, :mid]
+                        print("GT first 3 boxes raw:\n", gt_boxes_cat[:3])
+                        print("GT shape:", gt_boxes_cat.shape)
+                        print("GT min/max:", gt_boxes_cat.min(), gt_boxes_cat.max())
+                        print("GT mean size per dim:", gt_whd.mean(axis=0))
+                        print("GT mean size (scalar):", gt_whd.mean())
 
-                gt_whd = gt_boxes_cat[:, mid:] - gt_boxes_cat[:, :mid]
-                print("GT shape:", gt_boxes_cat.shape)
-                print("GT min/max:", gt_boxes_cat.min(), gt_boxes_cat.max())
-                print("GT mean size per dim:", gt_whd.mean(axis=0))
-                print("GT mean size (scalar):", gt_whd.mean())
+                        # ---- PRED (already numpy) ----
+                        pred_boxes = out["pred_boxes"][sample_num]        # numpy array [M, D]
+                        D = pred_boxes.shape[1]
+                        mid = D // 2
 
-                # ---- PRED (already numpy) ----
-                pred_boxes = out["pred_boxes"][sample_num]        # numpy array [M, D]
-                print("PRED first 3 boxes raw:\n", pred_boxes[:3])
-                D = pred_boxes.shape[1]
-                mid = D // 2
-
-                pred_whd = pred_boxes[:, mid:] - pred_boxes[:, :mid]
-                print("PRED shape:", pred_boxes.shape)
-                print("PRED min/max:", pred_boxes.min(), pred_boxes.max())
-                print("PRED mean size per dim:", pred_whd.mean(axis=0))
-                print("PRED mean size (scalar):", pred_whd.mean())
-                print('-'*50)
+                        pred_whd = pred_boxes[:, mid:] - pred_boxes[:, :mid]
+                        print("PRED first 3 boxes raw:\n", pred_boxes[:3])
+                        print("PRED shape:", pred_boxes.shape)
+                        print("PRED min/max:", pred_boxes.min(), pred_boxes.max())
+                        print("PRED mean size per dim:", pred_whd.mean(axis=0))
+                        print("PRED mean size (scalar):", pred_whd.mean())
+                        
 
                 # Node AP
                 node_ap = box_evaluator(
@@ -248,6 +310,21 @@ def evaluate_on_test(net, test_loader, config, device, args):
                     gt_boxes_class
                 )
                 node_ap_result.extend(node_ap)
+                
+                if args.show_debug == True and idx == 0 and sample_num < 2: 
+                    gt_e = edge_boxes[0]
+                    pr_e = pred_edge_boxes_debug[0] if len(pred_edge_boxes_debug) else np.zeros((0, 6), np.float32)
+                    sc_e = pred_rels_score_debug[0] if len(pred_rels_score_debug) else np.zeros((0,), np.float32)
+
+                    print("EDGE GT boxes shape:", gt_e.shape, "min/max:", gt_e.min(), gt_e.max())
+                    print("EDGE PRED boxes shape:", pr_e.shape, "min/max:", (pr_e.min() if pr_e.size else None), (pr_e.max() if pr_e.size else None))
+                    print("EDGE pred_edges shape:", pred_edges.shape)
+                    print("EDGE scores shape:", np.asarray(sc_e).shape, "dtype:", np.asarray(sc_e).dtype)
+
+                    if pr_e.shape[0] != len(sc_e):
+                        print("!!! MISMATCH: #pred edge boxes =", pr_e.shape[0], "but #scores =", len(sc_e))
+                    
+                    print('-'*50)
 
                 # Edge AP
                 edge_ap = box_evaluator(
@@ -348,9 +425,9 @@ def evaluate_on_test(net, test_loader, config, device, args):
     csv_header_string = "smd;smd_std;node_mAP;node_mAP_std;node_mAR;node_mAR_std;edge_mAP;edge_mAP_std;edge_mAR;edge_mAR_std"
     csv_value_string = f"{smd.item()};{smd_std.item()};{node_mAP.item()};{node_mAP_std.item()};{node_mAR.item()};{node_mAR_std.item()};{edge_mAP.item()};{edge_mAP_std.item()};{edge_mAR.item()};{edge_mAR_std.item()}"
 
-    # with open(csv_file, "w", encoding="utf-8") as f:
-    #     f.write(csv_header_string + "\n")
-    #     f.write(csv_value_string + "\n")
+    with open(csv_file, "w", encoding="utf-8") as f:
+        f.write(csv_header_string + "\n")
+        f.write(csv_value_string + "\n")
 
     print(f"[OK] Saved results to: {csv_file}")
 
@@ -370,15 +447,20 @@ def main(args):
 
     # --- Build train/val/test vessel datasets ---
     # Assumes your build_vessel_data supports these modes.
-    if args.mixed:
-        config.DATA.MIXED = True
-        print('Mixed BN Calibration!')
-        train_ds, val_ds, _ = build_mixed_data(config, mode="split", debug=False)
-        test_ds  = build_vessel_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
+    if config.DATA.DATASET == "road_dataset":
+        train_ds, val_ds, _  = build_road_network_data(config, mode="split",  debug=False, max_samples=args.max_samples_test)
+        test_ds  = build_road_network_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
     
     else:
-        train_ds, val_ds, _ = build_vessel_data(config, mode="split", debug=False, max_samples=args.max_samples_train if args.max_samples_train > 0 else -1)
-        test_ds  = build_vessel_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
+        if args.mixed:
+            config.DATA.MIXED = True
+            print('Mixed BN Calibration!')
+            train_ds, val_ds, _ = build_vessel_data(config, mode="split", debug=False, max_samples=args.max_samples_train if args.max_samples_train > 0 else -1)
+            test_ds  = build_vessel_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
+        
+        else:
+            train_ds, val_ds, _ = build_vessel_data(config, mode="split", debug=False, max_samples=args.max_samples_train if args.max_samples_train > 0 else -1)
+            test_ds  = build_vessel_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
 
     train_loader = build_loader(train_ds, config, shuffle=True)
     val_loader   = build_loader(val_ds,   config, shuffle=False)
@@ -420,6 +502,7 @@ if __name__ == "__main__":
     parser.add_argument("--mixed", action="store_true")
     parser.add_argument("--general_transformer", action="store_true")
     parser.add_argument("--no_strict_loading", default=False, action="store_true")
+    parser.add_argument("--show_debug", default=False, action="store_true")
 
     # dataset limits
     parser.add_argument("--max_samples_train", type=int, default=0)
@@ -437,16 +520,18 @@ if __name__ == "__main__":
     parser.add_argument("--display_prob", type=float, default=0.0018)
 
     args = parser.parse_args([
-        '--exp_name', 'finetuning_mixed_synth_upsampled_2_vessel_calib',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_upsampled_2_20/models/checkpoint_epoch=100.pt',
+        '--exp_name', 'prova_strade',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=150.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples_test', '5000',
         '--max_samples_val', '1000',
         '--eval',
-        '--no_strict_loading',
-        '--display_prob', '0.02',
+        # '--no_strict_loading',
+        '--display_prob', '0.0',
         '--bn_calibrate',
+        # '--mixed'
+        # '--show_debug',
     ])
     
     main(args)

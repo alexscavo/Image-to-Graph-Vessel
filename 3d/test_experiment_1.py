@@ -446,7 +446,7 @@ if __name__ == "__main__":
         '--eval',
         '--no_strict_loading',
         '--display_prob', '0.0',
-        # '--bn_calibrate',
+        '--bn_calibrate',
         '--bn_calib_mode', 'train',
         '--bn_calib_batches', '200',
 
