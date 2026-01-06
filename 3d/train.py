@@ -395,7 +395,7 @@ if __name__ == '__main__':
     args = parser.parse_args([
         '--exp_name', 'prova_strade',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
-        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=10.pt',
+        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=50.pt',
         '--restore_state',
         # '--no_strict_loading',
         '--continuous',
