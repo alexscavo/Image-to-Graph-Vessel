@@ -16,6 +16,7 @@ from data.dataset_real_eye_vessels import build_real_vessel_network_data
 from training.evaluator import build_evaluator
 from training.trainer import build_trainer
 from models import build_model
+from models.EMA_model import EMA_Model
 from utils.utils import image_graph_collate_road_network
 from torch.utils.tensorboard import SummaryWriter
 from models.matcher import build_matcher
@@ -162,6 +163,17 @@ def main(args):
     print('-'*50)
 
     net = build_model(config).to(device)
+    net_wo_dist = net
+
+    # Always take relation_embed from the underlying module
+    relation_embed = net_wo_dist.relation_embed
+
+    # EMA model creation (after wrapping so you’re copying the “real” module)
+    use_ema = getattr(config.TRAIN, 'USE_EMA', True)
+    ema_relation = None
+    if use_ema:
+        ema_decay = getattr(config.TRAIN, 'EMA_DECAY', 0.999)
+        ema_relation = EMA_Model(relation_embed, decay=ema_decay).to(device)
 
     seg_net = build_model(config).to(device)
 
@@ -184,7 +196,8 @@ def main(args):
         net,
         num_edge_samples=config.TRAIN.NUM_EDGE_SAMPLES,
         edge_sampling_mode=edge_sampling_mode,
-        domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device)
+        domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device),
+        ema_relation_embed=ema_relation
     )
     val_loss = SetCriterion(config, matcher, net, num_edge_samples=9999, edge_sampling_mode=False)
 

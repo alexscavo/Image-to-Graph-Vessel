@@ -66,7 +66,10 @@ class SetCriterion(nn.Module):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
 
-    def __init__(self, config, matcher, net, num_edge_samples=80, edge_sampling_mode=EDGE_SAMPLING_MODE.UP, domain_class_weight=None):
+    def __init__(self, config, matcher, net, num_edge_samples=80,
+                edge_sampling_mode=EDGE_SAMPLING_MODE.UP,
+                domain_class_weight=None,
+                ema_relation_embed=None):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -104,6 +107,215 @@ class SetCriterion(nn.Module):
                             'edges':config.TRAIN.W_EDGE,
                             'domain':config.TRAIN.W_DOMAIN
                             }
+        
+        # --- Hard negative mining scheduling (defaults) ---
+        self.ema_relation_embed = ema_relation_embed
+        self.hard_negative_mining = getattr(config.TRAIN, "HARD_NEGATIVE_MINING", False)
+        self.hnm_hard_fraction_end = float(getattr(config.TRAIN, "HNM_HARD_FRACTION_END", 0.6))        
+        self.hnm_hard_fraction_start = float(getattr(config.TRAIN, "HNM_HARD_FRACTION_START", 0.2))
+        self.hnm_ramp_epochs = int(getattr(config.TRAIN, "HNM_RAMP_EPOCHS", 10))  # ramp over first N epochs
+        self.hnm_warmup_epochs = int(getattr(config.TRAIN, "HNM_WARMUP_EPOCHS", 0))
+        self.hnm_pool_mult = getattr(config.TRAIN, "HNM_POOL_MULT", 2)
+        self.hnm_mode = getattr(config.TRAIN, "HNM_MODE", "top_k")  # or top_p_uniform or weighted
+        self.hnm_top_p = float(getattr(config.TRAIN, "HNM_TOP_P", 0.3))      # for top_p_uniform
+        self.hnm_temp = float(getattr(config.TRAIN, "HNM_TEMP", 0.5))        # for weighted (temperature)
+
+        # progress state updated by trainer
+        self._hnm_epoch = 1
+        self._hnm_iter = 0
+        self._hnm_epoch_len = 1
+        self._hnm_max_epochs = 1
+
+    def set_hnm_progress(self, epoch: int, iteration: int, epoch_len: int, max_epochs: int):
+        self._hnm_epoch = int(epoch)
+        self._hnm_iter = int(iteration)
+        self._hnm_epoch_len = max(1, int(epoch_len))
+        self._hnm_max_epochs = max(1, int(max_epochs))
+        
+    
+    def _get_scheduled_hard_fraction(self) -> float:
+        """
+        Linear ramp of hard fraction:
+        - 0 during warmup epochs (optional)
+        - then linearly from start -> end over hnm_ramp_epochs
+        - then stays at end
+        """
+        e = self._hnm_epoch
+        if e <= self.hnm_warmup_epochs:
+            return 0.0
+
+        # epoch progress inside ramp window
+        ramp_e = max(1, self.hnm_ramp_epochs)
+        t = min(1.0, (e - self.hnm_warmup_epochs - 1) / ramp_e)
+        return float(self.hnm_hard_fraction_start + t * (self.hnm_hard_fraction_end - self.hnm_hard_fraction_start))
+    
+    @torch.no_grad()     
+    def select_hard_negative_edges(
+        self,
+        neg_edges: torch.Tensor,
+        take_neg: int,
+        rearranged_object_token: torch.Tensor,
+        relation_token_batch: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+        """
+        Selects hard negative edges from a set of candidate negative edges.
+
+        Args:
+            neg_edges (torch.Tensor): Set of all negative edges from which hard negatives will be selected.
+            take_neg (int): Number of negative edges to select.
+            rearranged_object_token (torch.Tensor): Object token features arranged according to matcher indices.
+            relation_token_batch (torch.Tensor | None): Relation token features for the current batch item.
+
+        Returns:
+            torch.Tensor: Selected negative edges of shape (take_neg, 2).
+        """
+        
+        # --- dimension checks ---
+        assert neg_edges.ndim == 2 and neg_edges.size(1) == 2, f"neg_edges must be [N,2], got {tuple(neg_edges.shape)}"
+        assert neg_edges.dtype in (torch.int64, torch.int32), f"neg_edges must be integer type, got {neg_edges.dtype}"
+        assert rearranged_object_token.ndim == 2, f"rearranged_object_token must be [Q,D], got {tuple(rearranged_object_token.shape)}"
+        assert take_neg >= 0, f"take_neg must be >= 0, got {take_neg}"
+        
+        device = neg_edges.device
+        n_all = int(neg_edges.size(0))  # total number of available negative edges for the sample
+        
+        if take_neg == 0 or n_all == 0:
+            return neg_edges.new_zeros((0, 2))
+        
+        take_neg = min(take_neg, n_all) # we can't select more negative edges than available
+        
+        # if EMA model is not present or HNM is disabled, fall back to random sampling
+        if self.ema_relation_embed is None or self.hard_negative_mining is False:
+            
+            idx = torch.randperm(n_all, device=device)[:take_neg]
+            sel = neg_edges[idx, :]
+            
+            # shuffle edges for undirected edge
+            shuffle = torch.rand((sel.size(0),), device=device) > 0.5
+            sel[shuffle] = sel[shuffle][:, [1, 0]]
+            
+            return sel
+        
+        # --- candidate pool ---
+        pool_mult = max(1.0, float(self.hnm_pool_mult))
+        candidate_pool_size = min(n_all, int(round(pool_mult * take_neg)))
+        cand_idx = torch.randperm(n_all, device=device)[:candidate_pool_size]
+        cand_edges = neg_edges[cand_idx]
+        
+        # random shuffling for undirected edges
+        shuffle = torch.rand((cand_edges.size(0),), device=device) > 0.5
+        cand_edges[shuffle] = cand_edges[shuffle][:, [1, 0]]
+        
+        # now we need to build relation_features for EMA scoring (matches loss_edges construction)
+        # first we select the object tokens for each edge (i, j)
+        tok_i = rearranged_object_token[cand_edges[:, 0], :]    # embedding endpoint i 
+        tok_j = rearranged_object_token[cand_edges[:, 1], :]    # embedding endpoint j
+        
+        if self.rln_token > 0:
+            assert relation_token_batch is not None, "relation_token_batch required when self.rln_token > 0"
+            
+            # flatten the relation token if used
+            rel_flat = relation_token_batch.reshape(-1).unsqueeze(0).repeat(cand_edges.size(0), 1)
+            
+            # concatenate the relation token to the endpoint/bbject tokens
+            relation_feature = torch.cat([tok_i, tok_j, rel_flat], dim=1)
+        else:
+            relation_feature = torch.cat([tok_i, tok_j], dim=1)
+            
+        # --- EMA scoring ---
+        logits = self.ema_relation_embed(relation_feature)  # logits for each negative edge in cand_size
+        assert logits.ndim == 2 and logits.size(1) == 2, f"EMA logits must be [N,2], got {tuple(logits.shape)}"
+        scores = torch.softmax(logits, dim=1)[:, 1]     # confidence score for POSITIVE edge (the model think it's positive but it's not in reality)
+    
+        # --- scheduled hard fraction ---
+        hard_frac = self._get_scheduled_hard_fraction()
+        hard_k = int(round(hard_frac * take_neg))   # how many hard negatives
+        hard_k = max(0, min(hard_k, take_neg))
+        soft_k = take_neg - hard_k                  # how many soft negatives
+        
+        # --- pick negatives according to HNM mode ---
+        if self.hnm_mode == "weighted":
+            # Weighted sampling over the *entire* candidate pool:
+            # directly pick take_neg edges (no hard/soft split).
+            T = max(1e-6, float(self.hnm_temp))
+            # exp(score / T), stabilized
+            w = torch.exp((scores - scores.max()) / T) + 1e-12
+
+            k = min(take_neg, candidate_pool_size)
+            sel_idx_in_cand = torch.multinomial(w, num_samples=k, replacement=False)
+            selected = cand_edges[sel_idx_in_cand]
+
+        else:
+            # Hard/soft split for non-weighted modes (top_k, top_p_uniform, ...)
+            # --- pick hard: according to HNM mode ---
+            if hard_k > 0:
+                if self.hnm_mode == "top_k":
+                    # select the top hard_k edges from the candidate pool
+                    hard_idx_in_cand = torch.topk(
+                        scores, k=min(hard_k, candidate_pool_size), largest=True
+                    ).indices
+
+                elif self.hnm_mode == "top_p_uniform":
+                    # inside the candidate pool select a random fraction of hard negatives
+                    top_p = max(0.0, min(1.0, float(self.hnm_top_p)))
+                    hard_set_size = max(1, int(round(top_p * candidate_pool_size)))
+                    hard_set_size = min(hard_set_size, candidate_pool_size)
+
+                    # indices of the top hard_set_size scores (not necessarily the final hard_k)
+                    hard_set_idx = torch.topk(scores, k=hard_set_size, largest=True).indices
+
+                    # now uniformly sample out of this hard set (without replacement)
+                    if hard_set_size >= hard_k:
+                        perm = torch.randperm(hard_set_size, device=device)[:hard_k]
+                        hard_idx_in_cand = hard_set_idx[perm]
+                    else:
+                        # if hard_set_size < hard_k, take all and later fill if needed
+                        hard_idx_in_cand = hard_set_idx
+
+                else:
+                    raise ValueError(f"Unknown HNM_MODE: {self.hnm_mode}")
+
+                hard_edges = cand_edges[hard_idx_in_cand]
+
+                # the remaining indices are for the soft sampling
+                mask = torch.ones((candidate_pool_size,), dtype=torch.bool, device=device)
+                mask[hard_idx_in_cand] = False
+                remaining_edges = cand_edges[mask]
+            else:
+                hard_edges = cand_edges.new_zeros((0, 2))
+                remaining_edges = cand_edges
+
+            # --- pick soft: random from remaining ---
+            if soft_k > 0:
+                n_rem = int(remaining_edges.size(0))
+                if n_rem >= soft_k:
+                    soft_idx = torch.randperm(n_rem, device=device)[:soft_k]
+                    soft_edges = remaining_edges[soft_idx]
+                else:
+                    soft_edges = remaining_edges
+                    need = soft_k - n_rem
+                    filler_src = hard_edges if hard_edges.size(0) > 0 else cand_edges
+                    fill_idx = torch.randperm(int(filler_src.size(0)), device=device)[:need]
+                    soft_edges = torch.cat([soft_edges, filler_src[fill_idx]], dim=0)
+            else:
+                soft_edges = cand_edges.new_zeros((0, 2))
+
+            selected = torch.cat([hard_edges, soft_edges], dim=0)
+
+        # Safety: ensure exact count == take_neg (important for downstream concatenation)
+        if selected.size(0) > take_neg:
+            selected = selected[:take_neg]
+        elif selected.size(0) < take_neg:
+            need = take_neg - selected.size(0)
+            extra_idx = torch.randperm(candidate_pool_size, device=device)[:need]
+            selected = torch.cat([selected, cand_edges[extra_idx]], dim=0)
+            
+        # final undirected shuffle (optional; keep consistent with original behavior)
+        shuffle2 = torch.rand((selected.size(0),), device=device) > 0.5
+        selected[shuffle2] = selected[shuffle2][:, [1, 0]]    
+        
+
+        return selected
         
     def loss_class(self, outputs, indices):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
@@ -260,8 +472,15 @@ class SetCriterion(nn.Module):
             else:
                 take_neg = neg_edges.shape[0]
                 total_edge = pos_edge.shape[0]+neg_edges.shape[0]
-            all_edges_ = torch.cat((pos_edge, neg_edges[:take_neg]), 0)
-            # all_edges.append(all_edges_)
+            
+            selected_neg_edges = self.select_hard_negative_edges(
+                neg_edges.to(pos_edge.device),
+                take_neg,
+                rearranged_object_token,
+                relation_token_batch=(relation_token[batch_id, :] if self.rln_token > 0 else None),
+            )
+            all_edges_ = torch.cat((pos_edge, selected_neg_edges), 0)
+
             edge_labels.append(torch.cat((torch.ones(pos_edge.shape[0], dtype=torch.long), torch.zeros(take_neg, dtype=torch.long)), 0))
 
             # concatenate object token pairs with relation token for all sampled edges
