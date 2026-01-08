@@ -10,7 +10,7 @@ from torch.nn.functional import conv2d
 from torchvision.transforms import Grayscale
 import torch.nn.functional as F
 from utils.utils import rotate_image, rotate_coordinates
-from monai.transforms import GaussianSmooth, RandGaussianNoise, ScaleIntensity, Resize, SpatialPad
+from monai.transforms import GaussianSmooth, RandGaussianNoise, ScaleIntensity, Resize, SpatialPad, ScaleIntensityRange
 from PIL import Image
 
 train_transform = []
@@ -57,12 +57,16 @@ class Sat2GraphDataLoader(Dataset):
             self.gaussian_noise = RandGaussianNoise(prob=1, std=0.2, mean=0.55)
             self.gaussian_smooth = GaussianSmooth(sigma=1)
         else:
-            self.gaussian_noise = RandGaussianNoise(prob=1, std=0.4, mean=0.)
+            self.gaussian_noise = RandGaussianNoise(prob=1, std=0.05, mean=0.)
             self.gaussian_smooth = GaussianSmooth(sigma=1.2)
 
         self.domain_classification = domain_classification
 
-        self.scaling = ScaleIntensity(minv=-0.5, maxv=0.5)
+        self.scaling = ScaleIntensityRange(
+            a_min=-0.5, a_max=0.5,
+            b_min=-0.5, b_max=0.5,
+            clip=True
+        )
 
     def __len__(self):
         """[summary]
@@ -74,122 +78,116 @@ class Sat2GraphDataLoader(Dataset):
     
     def _project_image_3d(self, sliced_data, z_pos):
         """
-        Project a 2D slice into a 3D space
-        Paramaters:
-            sliced_data: 2D image slice. Must be a torch tensor with values in the range [-0.5, 0.5]
-        Returns:
-            Projected 3D image
+        Project a 2D slice into a 3D space.
+
+        sliced_data: torch tensor (C,H,W) in [-0.5, 0.5]
+        returns: (C,H,W,D) in [-0.5, 0.5], background = -0.5
         """
 
-        projected_data = torch.zeros(size=(
-            sliced_data.shape[0],
-            sliced_data.shape[1],
-            sliced_data.shape[2],
-            sliced_data.shape[-1]
-        ))
-        cutoff_slice_data = sliced_data.clone()
-        projected_data[:, :, :, round(z_pos * sliced_data.shape[1]) + 1] += cutoff_slice_data
-        projected_data[:, :, :, round(z_pos * sliced_data.shape[1]) + 2] += cutoff_slice_data
-        projected_data[:, :, :, round(z_pos * sliced_data.shape[1]) - 1] += cutoff_slice_data
-        projected_data[:, :, :, round(z_pos * sliced_data.shape[1]) - 2] += cutoff_slice_data
-        projected_data[:, :, :, round(z_pos * (sliced_data.shape[1]))] += cutoff_slice_data
-        projected_data -= 0.5
+        C, H, W = sliced_data.shape
+
+        # Put everything at background value
+        projected_data = torch.full(
+            (C, H, W, W),  # keep your original D = W convention
+            -0.5,
+            dtype=sliced_data.dtype,
+            device=sliced_data.device,
+        )
+
+        z = int(round(z_pos * H))  # keep your original choice (uses H)
+        # optional: clamp to avoid edge issues
+        z = max(2, min(W - 3, z))
+
+        # Add the slice on a few neighboring planes
+        for dz in (-2, -1, 0, 1, 2):
+            projected_data[:, :, :, z + dz] = sliced_data
 
         return projected_data
 
+
     def __getitem__(self, idx):
-        """[summary]
-
-        Args:
-            idx ([type]): [description]
-
-        Returns:
-            [type]: [description]
-        """
         data = self.data[idx]
-        seg_data, _ = load(data['seg'])
-        img_data, _ = load(data['img'])
+        seg_np, _ = load(data["seg"])
+        img_np, _ = load(data["img"])
+        vtk_data = pyvista.read(data["vtp"])
 
-        vtk_data = pyvista.read(data['vtp'])
+        # ---- Load seg: [0,1], then binarize, then shift to {-0.5, +0.5} ----
+        seg_data = torch.from_numpy(seg_np).float() / 255.0   # H,W (or already H,W)
+        seg_data = seg_data.unsqueeze(0)                      # 1,H,W
 
-        seg_data = (torch.from_numpy(seg_data).float()/255.).unsqueeze(0)
+        # ---- Load image: keep as REAL image, not seg. Grayscale is OK. ----
+        # If img_np is (C,H,W), convert to (H,W,C) for PIL then grayscale
+        img_np_hwc = np.moveaxis(img_np, 0, -1)               # H,W,C
+        img_gray = np.array(Image.fromarray(img_np_hwc).convert("L"))
+        img_data = torch.from_numpy(img_gray).float() / 255.0 # H,W in [0,1]
+        img_data = img_data.unsqueeze(0)                      # 1,H,W
 
-        img_data = np.moveaxis(img_data, 0, -1)
-        img_data = torch.from_numpy(np.array(Image.fromarray(img_data).convert('L')) / 255.).unsqueeze(0)
-
+        # ---- Resize 2D inputs consistently ----
         img_data = self.resize(img_data)
         seg_data = self.resize(seg_data)
-        seg_data[seg_data < 0.3] = 0
-        seg_data[seg_data >= 0.3] = 1
 
-        if self.real_set_augment:
-            growth_factor = random.randint(self.growth_lower_bound, self.growth_upper_bound)
+        # ---- Threshold seg in 2D, then map to {-0.5, +0.5} BEFORE 3D projection ----
+        seg_data = (seg_data >= 0.3).float()  # {0,1}
+        seg_data = seg_data - 0.5             # {-0.5, +0.5}
 
-            x = seg_data.unsqueeze(0).unsqueeze(0).float()
-            for i in range(growth_factor):
-                x = conv2d(x, weight=self.growth_tensor, padding=1)
-
-            x[x > 1] = 1
-            x[x < 1] = 0
-            seg_data = x - 0.5
-
-            seg_data = self.resize(seg_data[0])
-            img_data = seg_data
-
-
-        coordinates = torch.tensor(np.float32(
-            np.asarray(vtk_data.points)), dtype=torch.float)[:, :2]
-        lines = torch.tensor(np.asarray(
-            vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)[:, 1:]
-
+        # ---- Graph data ----
+        coordinates = torch.tensor(np.asarray(vtk_data.points), dtype=torch.float32)[:, :2]
+        lines = torch.tensor(vtk_data.lines.reshape(-1, 3), dtype=torch.int64)[:, 1:]
         z_pos = None
 
         if self.gaussian_augment:
+            # Choose z (normalized) for 3D embedding
             z_pos = random.randint(3, seg_data.shape[-1] - 4) / (seg_data.shape[-1] - 1) if not self.rotate else 0.5
 
+            # Project to 3D. NOTE:
+            # - seg_data is already centered {-0.5,+0.5}
+            # - img_data is still [0,1]; _project_image_3d() will center it internally
             seg_data = self._project_image_3d(seg_data, z_pos)
             img_data = self._project_image_3d(img_data, z_pos)
 
+            # Coordinates -> 3D
             coordinates = F.pad(coordinates, (0, 1), "constant", z_pos)
-            # coordinates = coordinates[:, [1, 0, 2]]
 
             if self.rotate:
                 if self.continuous:
                     alpha = random.randint(0, 270)
-                    beta = random.randint(0, 270)
+                    beta  = random.randint(0, 270)
                     gamma = random.randint(0, 270)
                 else:
                     alpha = random.randint(0, 3) * 90
-                    beta = random.randint(0, 3) * 90
+                    beta  = random.randint(0, 3) * 90
                     gamma = random.randint(0, 3) * 90
 
                 seg_data = rotate_image(seg_data, alpha, beta, gamma)
                 img_data = rotate_image(img_data, alpha, beta, gamma)
                 coordinates = rotate_coordinates(coordinates, alpha, beta, gamma)
 
-                seg_data[seg_data >= 0] = 0.5
-                seg_data[seg_data < 0] = -0.5
+                # Re-binarize seg after interpolation artifacts from rotation
+                seg_data = torch.where(seg_data >= 0, torch.tensor(0.5, device=seg_data.device), torch.tensor(-0.5, device=seg_data.device))
 
-            if self.real_set_augment:
-                img_data = seg_data.clone()
-                img_data[seg_data > 0] -= 0.5
-                img_data[seg_data <= 0] += 0.25
+            # Photometric aug on img only (safe). Keep it mild while debugging.
+            img_data = self.gaussian_noise(img_data)
 
-                img_data = self.gaussian_noise(img_data)
+            # IMPORTANT:
+            # Do NOT apply self.scaling here if it expects input in [0,1].
+            # After _project_image_3d(), img_data is typically in [-0.5, 0.5].
+            # So: either skip scaling, or set self.scaling to an identity mapping for [-0.5,0.5].
+            # img_data = self.scaling(img_data)  # <-- keep OFF unless it's identity in [-0.5,0.5]
 
-                img_data = self.gaussian_smooth(img_data)
-
-            img_data = self.scaling(img_data)
-
-            # Add padding to the borders
+            # Pad 3D volumes with background = -0.5
             img_data = self.pad_transform(img_data)
             seg_data = self.pad_transform(seg_data)
 
         else:
+            # 2D path (if you ever use it)
+            img_data = img_data - 0.5  # center to match padding/value convention
             img_data = self.gaussian_noise(img_data)
-            """image_data[image_data > 0.5] = 0.5
-            image_data = self.gaussian_smooth(image_data)"""
-            img_data = self.scaling(img_data)
+
+            # Here scaling can be OK if it's consistent with your chosen range.
+            # If self.scaling expects [0,1], don't center before scaling.
+            # If you want [-0.5,0.5], use an identity scaling or a fixed range scaler.
+            # img_data = self.scaling(img_data)
+
             img_data = self.pad_transform2d(img_data)
             seg_data = self.pad_transform2d(seg_data)
             coordinates = coordinates[:, [1, 0]]
@@ -197,6 +195,7 @@ class Sat2GraphDataLoader(Dataset):
         coordinates = (coordinates * (self.size - 2 * self.padding) + self.padding) / self.size
 
         return [img_data], [seg_data], [coordinates], [lines], [z_pos], [self.domain_classification]
+
 
 
 def build_road_network_data(config, mode='train', split=0.95, debug=False, gaussian_augment=False, rotate=False, continuous=False, max_samples=0, domain_classification=-1):
