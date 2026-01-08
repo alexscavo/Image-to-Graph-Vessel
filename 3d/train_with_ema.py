@@ -207,8 +207,11 @@ def main(rank=0, args=None):
     relation_embed = net_wo_dist.relation_embed
 
     # EMA model creation (after wrapping so you’re copying the “real” module)
-    ema_decay = getattr(config.TRAIN, 'EMA_DECAY', 0.999)
-    ema_relation = EMA_Model(relation_embed, decay=ema_decay).to(device)
+    use_ema = getattr(config.TRAIN, 'USE_EMA', True)
+    ema_relation = None
+    if use_ema:
+        ema_decay = getattr(config.TRAIN, 'EMA_DECAY', 0.999)
+        ema_relation = EMA_Model(relation_embed, decay=ema_decay).to(device)
 
     matcher = build_matcher(config, dims=2 if args.pretrain_general else 3)
     
@@ -291,6 +294,11 @@ def main(rank=0, args=None):
                 if args.restore_state:
                     optimizer.load_state_dict(checkpoint['optimizer'])
                     scheduler.load_state_dict(checkpoint['scheduler'])
+                    if ema_relation is not None and 'ema_relation' in checkpoint:
+                        try:
+                            ema_relation.ema.load_state_dict(checkpoint['ema_relation'])
+                        except Exception as _e:
+                            print('Warning: could not restore ema_relation state:', _e)
                     
             print('Checkpoint loaded from %s' % args.resume)
     except Exception as e:
