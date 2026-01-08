@@ -151,7 +151,7 @@ class Sat2GraphDataLoader(Dataset):
             img_data = self._project_image_3d(img_data, z_pos)
 
             coordinates = F.pad(coordinates, (0, 1), "constant", z_pos)
-            coordinates = coordinates[:, [1, 0, 2]]
+            # coordinates = coordinates[:, [1, 0, 2]]
 
             if self.rotate:
                 if self.continuous:

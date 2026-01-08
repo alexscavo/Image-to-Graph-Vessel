@@ -377,8 +377,8 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     args = parser.parse_args([
-        '--exp_name', 'pretraining_mixed_synth_2',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
+        '--exp_name', 'prova_strade_mie',
+        '--config', '3d/configs/roads_only.yaml',
         '--continuous',
         '--display_prob', '0.001',
     ])

@@ -455,7 +455,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
     )
 
     out_dir = os.path.join(
-        '/data/scavone/cross-dim_i2g_3d/visual di prova',
+        'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/visual_di_prova',
         "runs",
         f"{config.log.exp_name}_{config.DATA.SEED}",
         "debug_vis"

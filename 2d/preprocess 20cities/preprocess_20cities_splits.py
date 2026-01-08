@@ -717,8 +717,8 @@ if __name__ == "__main__":
                           '--split', 'C:/Users/Utente/Desktop/tesi/datasets/20cities/splits.csv',
                           '--graph_format', 'both',
                           '--overlap', '0.35',
-                          '--num_train', '99200',
-                          '--num_val', '24800',
-                          '--num_test', '25000'])
+                          '--num_train', '8000',
+                          '--num_val', '1000',
+                          '--num_test', '5000'])
     
     main(args)

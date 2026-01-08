@@ -155,9 +155,9 @@ if __name__ == "__main__":
     
     args = parser.parse_args(['--root', "C:/Users/Utente/Desktop/tesi/datasets/20cities",
                               '--ratio',
-                              '--train_patches_num', '99200',
-                              '--val_patches_num', '24800',
-                              '--test_patches_num', '25000',
+                              '--train_patches_num', '8000',
+                              '--val_patches_num', '1000',
+                              '--test_patches_num', '5000',
                              ])
     
     main(args)

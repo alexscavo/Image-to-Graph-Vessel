@@ -2,19 +2,19 @@ DATA:
     DIM: 3 # data dimension
     BATCH_SIZE: 32 # 48 Batch size for a single GPU, could be overwritten by command line argument
     DATA_PATH: ""
-    SOURCE_DATA_PATH: "/data/scavone/20cities/patches"
-    TARGET_DATA_PATH: "/data/scavone/20cities/patches"
-    NUM_SOURCE_SAMPLES: 1000  # all
+    SOURCE_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
+    TARGET_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
+    NUM_SOURCE_SAMPLES: 8000  # all
     NUM_TARGET_SAMPLES: 1000 # train + validation
-    TEST_DATA_PATH: "/data/scavone/20cities/patches"
+    TEST_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
     DATASET: "road_dataset" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
-    PAD_SIZE: [0, 0, 0]    # [5, 5, 5]
+    PAD_SIZE: [5, 5, 5]    # [5, 5, 5]
     GROWTH_RANGE: [5, 10]
     NUM_PATCH: 4 # no of patch from each volume
     INTERPOLATION: "bicubic" # Interpolation to resize image (random, bilinear, bicubic)
     PIN_MEMORY: True # Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.
-    NUM_WORKERS: 4 # Number of data loading threads
+    NUM_WORKERS: 0 # Number of data loading threads
     SEED: 20 # random seed for reproducibility
 
 MODEL:
@@ -60,7 +60,7 @@ MODEL:
         DEC_N_POINTS: 4
         ENC_N_POINTS: 4
         TWO_STAGE: False
-        OBJ_TOKEN: 80
+        OBJ_TOKEN: 120
         RLN_TOKEN: 2
         DUMMY_TOKEN: 0
         RLN_ATTN: True
@@ -72,7 +72,7 @@ MODEL:
 
 TRAIN:
     START_EPOCH: 0
-    EPOCHS: 50
+    EPOCHS: 150
     WARMUP_EPOCHS: 1
     WEIGHT_DECAY: 0.0001
     BASE_LR: 0.00007 # 0.0001
@@ -104,8 +104,8 @@ TRAIN:
     OPTIMIZER.EPS: 1e-8 # Optimizer Epsilon
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
-    SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
-    VAL_INTERVAL: 1 # validation interval
+    SAVE_PATH: "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
+    VAL_INTERVAL: 20 # validation interval
     SAVE_VAL: False # save validation data
 
     # loss
@@ -119,7 +119,7 @@ TRAIN:
     W_CARD: 0.8 # 1.0
     W_NODE: 2.0 # 2.0
     W_EDGE: 6.0 # 4.0
-    W_DOMAIN: 1.0   # valore completamente arbitrario
+    W_DOMAIN: 0.1   # valore completamente arbitrario
 
 log:
     exp_name: "repl_new-repo"
