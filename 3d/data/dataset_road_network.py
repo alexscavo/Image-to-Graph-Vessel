@@ -292,7 +292,7 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
         ]
         
         # ---- VAL FOLDERS ----
-        val_root = data_root / "train"
+        val_root = data_root / "val"
         
         img_folder_val = val_root / "raw"
         seg_folder_val = val_root / "seg"
@@ -314,12 +314,28 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
         train_files = data_dicts_train
         val_files = data_dicts_val
 
-        if debug:
-            train_files = train_files[:128]
-            val_files = train_files[:32]
-        elif max_samples > 0:
-            train_files = train_files[:max_samples]
-            val_files = val_files[:min(round(max_samples*(1-split)), config.DATA.BATCH_SIZE * 10)]
+        random.shuffle(train_files)
+        random.shuffle(val_files)
+        
+        N_train_total = len(train_files)
+        N_val_total = len(val_files)
+
+        if max_samples > 0:
+            # ratio of how much of training you keep
+            r = min(1.0, max_samples / max(1, N_train_total))
+
+            # slice train
+            train_keep = min(max_samples, N_train_total)
+            train_files = train_files[:train_keep]
+
+            # slice val with the same retention ratio
+            val_keep = int(round(N_val_total * r))
+
+            # safety: ensure at least 1 val sample if you want validation to run
+            # (set to 0 if you explicitly want to allow "no validation")
+            val_keep = max(1, val_keep) if N_val_total > 0 else 0
+
+            val_files = val_files[:val_keep]
 
         train_ds = Sat2GraphDataLoader(
             data=train_files,
