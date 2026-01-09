@@ -216,11 +216,7 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             {"nifti": nifti_file_train, "vtp": vtk_file_train, "seg": seg_file_train} 
             for nifti_file_train, vtk_file_train, seg_file_train in zip(nifti_files_train, vtk_files_train, seg_files_train)
             ]
-        
-        # print(f"---- Number of syntheticMRI data_dicts_train: {len(data_dicts_train)}")
-        # print("---- Data Dicts:")
-        # pprint(data_dicts_train[:2])
-        
+                
         
         # ---- VAL FOLDERS ----
         val_path = path / 'val'
@@ -246,16 +242,31 @@ def build_vessel_data(config, mode='train', split=0.95, debug=False, max_samples
             for nifti_file_val, vtk_file_val, seg_file_val in zip(nifti_files_val, vtk_files_val, seg_files_val)
             ]
         
-        # print(f"---- Number of syntheticMRI data_dicts_val: {len(data_dicts_val)}")
-        # print("---- Data Dicts:")
-        # pprint(data_dicts_val[:2])
-        
         train_files = data_dicts_train
         val_files   = data_dicts_val
         
+        random.shuffle(train_files)
+        random.shuffle(val_files)
+        
+        N_train_total = len(train_files)
+        N_val_total = len(val_files)
+
         if max_samples > 0:
-            train_files = train_files[:max_samples]
-            val_files = val_files[:round(max_samples*(1-split))]
+            # ratio of how much of training you keep
+            r = min(1.0, max_samples / max(1, N_train_total))
+
+            # slice train
+            train_keep = min(max_samples, N_train_total)
+            train_files = train_files[:train_keep]
+
+            # slice val with the same retention ratio
+            val_keep = int(round(N_val_total * r))
+
+            # safety: ensure at least 1 val sample if you want validation to run
+            # (set to 0 if you explicitly want to allow "no validation")
+            val_keep = max(1, val_keep) if N_val_total > 0 else 0
+
+            val_files = val_files[:val_keep]
             
         train_ds = vessel_loader(
             data=train_files,

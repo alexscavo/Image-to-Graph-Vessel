@@ -40,10 +40,10 @@ def build_mixed_data(config, mode='split', split=0.95, use_grayscale=False, debu
     val_ds = ConcatDataset([source_val_data, target_val_data])
 
     print(f"--- Dataset Balance Info ---")
-    print(f"Source samples (A): {num_samples_A}")
-    print(f"Target samples (B): {num_samples_B}")
+    print(f"Source samples (A) - train: {num_samples_A}, val: {len(source_val_data)}")
+    print(f"Target samples (B) - train: {num_samples_B}, val: {len(target_val_data)}")
     print(f"Oversampling Factor for Target: {target_multiplier:.2f}x")
-    print(f"Total Combined Samples in ConcatDataset: {len(train_ds)}")
+    print(f"Total Combined Samples in ConcatDataset - train: {len(train_ds)}, val: {len(val_ds)}")
     
     if upsample_target_domain:
         print("upsampling")
