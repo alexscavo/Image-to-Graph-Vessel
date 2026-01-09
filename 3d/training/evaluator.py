@@ -1,6 +1,7 @@
 import os
 import gc
 import torch
+from ignite.engine import Events
 import numpy as np
 from monai.engines import SupervisedEvaluator
 from monai.handlers import StatsHandler, CheckpointSaver, TensorBoardStatsHandler, TensorBoardImageHandler
@@ -23,6 +24,8 @@ from monai.utils import ForwardMode, min_version, optional_import
 from visualize_sample import create_sample_visual_3d, create_sample_visual_2d, create_gradcam_overlay_2d
 from metrics.similarity import SimilarityMetricPCA, SimilarityMetricTSNE, batch_cka, batch_cosine, batch_euclidean, create_feature_representation_visual
 from metrics.svcca import robust_cca_similarity
+import hashlib
+from utils.vis_debug_3d import DebugVisualizer3D
 
 
 if TYPE_CHECKING:
@@ -121,44 +124,44 @@ class RelationformerEvaluator(SupervisedEvaluator):
             h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images.type(torch.FloatTensor).to(engine.state.device), z_pos, domain_labels=domains)
 
         # ---- Grad-CAM for sample 0, token with highest object logit ----
-        gradcam_vol = None
-        try:
-            logits = out["pred_logits"]          # [B, num_queries, 2]
-            obj_logits = logits[0, :, 1]         # object-class logit for sample 0
-            top_idx = torch.argmax(obj_logits)
-            y = obj_logits[top_idx]              # scalar target
+        # gradcam_vol = None
+        # try:
+        #     logits = out["pred_logits"]          # [B, num_queries, 2]
+        #     obj_logits = logits[0, :, 1]         # object-class logit for sample 0
+        #     top_idx = torch.argmax(obj_logits)
+        #     y = obj_logits[top_idx]              # scalar target
 
-            self.network.zero_grad()
-            y.backward(retain_graph=True)
+        #     self.network.zero_grad()
+        #     y.backward(retain_graph=True)
 
-            # encoder feature maps & gradients
-            A = self._enc_acts[0]    # [C, D', H', W']
-            G = self._enc_grads[0]   # [C, D', H', W']
+        #     # encoder feature maps & gradients
+        #     A = self._enc_acts[0]    # [C, D', H', W']
+        #     G = self._enc_grads[0]   # [C, D', H', W']
 
-            # channel weights: global-average-pool gradients
-            weights = G.mean(dim=(1, 2, 3))      # [C]
+        #     # channel weights: global-average-pool gradients
+        #     weights = G.mean(dim=(1, 2, 3))      # [C]
 
-            # weighted sum of feature maps
-            cam = (weights.view(-1, 1, 1, 1) * A).sum(dim=0)   # [D', H', W']
-            cam = torch.relu(cam)
+        #     # weighted sum of feature maps
+        #     cam = (weights.view(-1, 1, 1, 1) * A).sum(dim=0)   # [D', H', W']
+        #     cam = torch.relu(cam)
 
-            # upsample to full input size [D, H, W]
-            cam = cam.unsqueeze(0).unsqueeze(0)  # [1,1,D',H',W']
-            cam = torch.nn.functional.interpolate(
-                cam,
-                size=images.shape[2:],           # (D, H, W)
-                mode="trilinear",
-                align_corners=False,
-            )[0, 0]                              # [D, H, W]
+        #     # upsample to full input size [D, H, W]
+        #     cam = cam.unsqueeze(0).unsqueeze(0)  # [1,1,D',H',W']
+        #     cam = torch.nn.functional.interpolate(
+        #         cam,
+        #         size=images.shape[2:],           # (D, H, W)
+        #         mode="trilinear",
+        #         align_corners=False,
+        #     )[0, 0]                              # [D, H, W]
 
-            # normalize 0–1
-            cam = cam - cam.min()
-            cam = cam / (cam.max() + 1e-8)
+        #     # normalize 0–1
+        #     cam = cam - cam.min()
+        #     cam = cam / (cam.max() + 1e-8)
 
-            gradcam_vol = cam.detach().cpu()     # [D, H, W]
-        except Exception as e:
-            # if anything goes wrong, just skip Grad-CAM for this iteration
-            gradcam_vol = None
+        #     gradcam_vol = cam.detach().cpu()     # [D, H, W]
+        # except Exception as e:
+        #     # if anything goes wrong, just skip Grad-CAM for this iteration
+        #     gradcam_vol = None
 
         with torch.no_grad():
             losses = self.loss_function(
@@ -169,7 +172,47 @@ class RelationformerEvaluator(SupervisedEvaluator):
                 pred_instance_domains
             )
 
+        # DEBUG START
+        # 2) Are logits different across samples?
+        # p = out["pred_logits"].softmax(-1)[..., 1]   # out_raw is the model output dict before relation_infer
+        # print("prob mean per sample:", p.mean(dim=1).detach().cpu().numpy())
+        # DEBUG END 
+
+        pred_logits = out["pred_logits"].detach().cpu()
+        # pred_logits: [B, Q, 2]
+        obj_prob = torch.softmax(out["pred_logits"], dim=-1)[..., 1]  # [B, Q]
+        obj_prob_mean = obj_prob.mean(dim=1).detach().cpu().numpy()   # [B]
+
+
         out = relation_infer(h.detach(), out, self.network, self.config.MODEL.DECODER.OBJ_TOKEN, self.config.MODEL.DECODER.RLN_TOKEN, apply_nms=False)
+
+        if hasattr(self, "viz3d"):
+            self.viz3d.maybe_save(
+                segs=segs,
+                images=images,
+                gt_nodes_list=nodes,
+                gt_edges_list=edges,
+                pred_nodes_list=out["pred_nodes"],
+                pred_edges_list=out["pred_rels"],
+                epoch=engine.state.epoch,
+                step=engine.state.iteration,
+                batch_index=0,
+                tag="val",
+            )
+
+        # DEBUG START
+        # 1) Do inputs differ?
+        '''print("img diff 0-1:", (images[0] - images[1]).abs().mean().item())
+
+        # 3) Are predicted nodes identical?
+        pred_nodes = out["pred_nodes"]  # list of numpy arrays
+        for b in range(min(4, len(pred_nodes))):
+            if len(pred_nodes[b]) > 0:
+                print(b, "nodes mean/std:", pred_nodes[b].mean(axis=0), pred_nodes[b].std(axis=0))
+            else:
+                print(b, "no nodes")'''
+        # DEBUG END
+
         
         enc = self.encoder_feats
         if enc is not None:
@@ -187,6 +230,65 @@ class RelationformerEvaluator(SupervisedEvaluator):
 
         gc.collect()
         torch.cuda.empty_cache()
+
+        # DEBUG START
+        N = 10  # must match your visualizer default
+        debug = []
+        B = images.shape[0]
+
+        for i in range(min(B, N)):
+            # input stats
+            x = images[i].detach()
+            x_cpu = x.float().contiguous().cpu()
+
+            # small hash: take a small slice so hashing is cheap and stable
+            flat = x_cpu.view(-1)
+            take = flat[: min(flat.numel(), 20000)]  # 20k floats max
+            hsh = hashlib.sha1(take.numpy().tobytes()).hexdigest()[:10]
+
+            x_min = float(x_cpu.min())
+            x_max = float(x_cpu.max())
+            x_mean = float(x_cpu.mean())
+            x_std = float(x_cpu.std())
+
+            # target stats (optional but useful)
+            s = segs[i].detach().float().contiguous().cpu()
+            s_mean = float(s.mean())
+            s_std = float(s.std())
+
+            # prediction summary
+            # out here is the result of relation_infer (lists per batch)
+            n_pred_nodes = int(len(out["pred_nodes"][i])) if isinstance(out["pred_nodes"][i], (list, np.ndarray)) else int(out["pred_nodes"][i].shape[0])
+            # pred_rels might be torch empty(0,2) or numpy array
+            pr = out["pred_rels"][i]
+            if isinstance(pr, torch.Tensor):
+                n_pred_edges = int(pr.shape[0])
+            else:
+                n_pred_edges = int(len(pr))
+
+            # also log object-class probabilities distribution for this sample
+            probs = torch.softmax(out_raw_logits := out_logits[i], dim=-1) if False else None
+            # (see note below about grabbing logits; easiest is to store out['pred_logits'] before overwriting 'out')
+            
+            if z_pos is None:
+                z_val = None
+            elif hasattr(z_pos, "__len__"):
+                zi = z_pos[i]
+                z_val = None if zi is None else float(zi)
+            else:
+                z_val = float(z_pos)
+
+            debug.append({
+                "i": i,
+                "hash": hsh,
+                "img_min": x_min, "img_max": x_max, "img_mean": x_mean, "img_std": x_std,
+                "seg_mean": s_mean, "seg_std": s_std,
+                "pred_nodes": n_pred_nodes,
+                "pred_edges": n_pred_edges,
+                "domain": int(domains[i].detach().cpu()) if torch.is_tensor(domains) else domains[i],
+                "z_pos": z_val,
+            })
+        # DEBUG END
         
         return {
             **{
@@ -200,10 +302,97 @@ class RelationformerEvaluator(SupervisedEvaluator):
                 "segs": segs,
                 "z_pos": z_pos,
                 "src": srcs,
-                "gradcam": gradcam_vol,
+                # "gradcam": gradcam_vol,
+                "debug": debug,
+                "obj_prob_mean": obj_prob_mean
             },
             **out}
 
+class TBWhatAmISeeing:
+    def __init__(self, writer, tag="val/what_was_shown", once_per_epoch=True):
+        self.writer = writer
+        self.tag = tag
+        self.once_per_epoch = once_per_epoch
+        self._last_epoch_logged = -1
+
+    def __call__(self, engine):
+        out = engine.state.output
+        if out is None or not isinstance(out, dict) or "debug" not in out:
+            return
+
+        if self.once_per_epoch:
+            if engine.state.epoch == self._last_epoch_logged:
+                return
+            self._last_epoch_logged = engine.state.epoch
+
+        step = engine.state.epoch
+        lines = []
+        for d in out["debug"]:
+            lines.append(
+                f'i={d.get("i")} hash={d.get("hash")} '
+                f'img(mean={d.get("img_mean"):.4f}, std={d.get("img_std"):.4f}, '
+                f'min={d.get("img_min"):.4f}, max={d.get("img_max"):.4f}) '
+                f'pred(nodes={d.get("pred_nodes")}, edges={d.get("pred_edges")}) '
+                f'domain={d.get("domain")} z_pos={d.get("z_pos"):.3f}'
+            )
+        self.writer.add_text(self.tag, "\n".join(lines), global_step=step)
+
+        # optional: collapse histogram if you return obj_prob_mean
+        if "obj_prob_mean" in out and out["obj_prob_mean"] is not None:
+            v = out["obj_prob_mean"]
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            v = np.asarray(v).reshape(-1)
+            # self.writer.add_histogram("val/obj_prob_hist", v, global_step=step)
+            self.writer.add_scalar("val/obj_prob_mean", float(v.mean()), global_step=step)
+            self.writer.add_scalar("val/obj_prob_std", float(v.std()), global_step=step)
+
+    def attach(self, engine):
+        engine.add_event_handler(Events.ITERATION_COMPLETED, self)
+
+class TBLogWhatWasShown:
+    def __init__(self, writer, tag_text="val/what_was_shown", tag_prefix="val/obj_prob", once_per_epoch=True):
+        self.writer = writer
+        self.tag_text = tag_text
+        self.tag_prefix = tag_prefix
+        self.once_per_epoch = once_per_epoch
+        self._last_epoch_logged = -1
+
+    def __call__(self, engine):
+        out = engine.state.output
+        if out is None:
+            return
+
+        # log only once per epoch (matches your epoch_level=True image logging)
+        if self.once_per_epoch:
+            if engine.state.epoch == self._last_epoch_logged:
+                return
+            self._last_epoch_logged = engine.state.epoch
+
+        step = engine.state.epoch  # keep aligned with your image handler
+
+        # 1) Text: per-sample IDs/stats/hashes etc. (expects out["debug"] list of dicts)
+        if "debug" in out and out["debug"] is not None:
+            lines = []
+            for d in out["debug"]:
+                lines.append(
+                    f'i={d.get("i")} hash={d.get("hash")} '
+                    f'img(mean={d.get("img_mean"):.4f}, std={d.get("img_std"):.4f}, min={d.get("img_min"):.4f}, max={d.get("img_max"):.4f}) '
+                    f'pred(nodes={d.get("pred_nodes")}, edges={d.get("pred_edges")}) '
+                    f'domain={d.get("domain")} z_pos={d.get("z_pos"):.3f}'
+                )
+            self.writer.add_text(self.tag_text, "\n".join(lines), global_step=step)
+
+        # 2) Scalars/hist: collapse diagnostic (expects out["obj_prob_mean"] = array-like [B])
+        if "obj_prob_mean" in out and out["obj_prob_mean"] is not None:
+            v = out["obj_prob_mean"]
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            v = np.asarray(v).reshape(-1)
+
+            # self.writer.add_histogram(f"{self.tag_prefix}_hist", v, global_step=step)
+            self.writer.add_scalar(f"{self.tag_prefix}_mean", float(v.mean()), global_step=step)
+            self.writer.add_scalar(f"{self.tag_prefix}_std", float(v.std()), global_step=step)
 
 def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, device, loss_function, pre_2d=False, pretrain_general=False, gaussian_augment=False, seg=False):
     """[summary]
@@ -216,6 +405,9 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
     Returns:
         [type]: [description]
     """
+    
+    from ignite.handlers import ProgressBar
+    
     val_handlers = [
         StatsHandler(output_transform=lambda x: None),
         CheckpointSaver(
@@ -239,7 +431,11 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
             interval=1,
             # max_channels=3,>
             output_transform=lambda x: create_sample_visual_2d(x) if pre_2d or pretrain_general else create_sample_visual_3d(x)
-        )
+        ),
+        ProgressBar(
+            persist=False, # Set to False so the bar disappears after evaluation is done
+            bar_format="{desc}[{n_fmt}/{total_fmt}] {percentage:3.0f}%|{bar}| Elapsed: {elapsed}<{remaining}, {rate_fmt}",
+        ),
     ]
 
     # scommentare
@@ -332,6 +528,7 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
             )
         )
 
+    val_handlers.append(TBWhatAmISeeing(writer))
 
     evaluator = RelationformerEvaluator(
         config= config,
@@ -355,5 +552,24 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
         loss_function=loss_function,
         seg=seg
     )
+    
+    evaluator.add_event_handler(Events.ITERATION_COMPLETED, TBLogWhatWasShown(writer))
+
+    # attach same visualizer used in trainer
+    out_dir = os.path.join(
+        "/data/scavone/cross-dim_i2g_3d/visual di prova",
+        "runs",
+        f"{config.log.exp_name}_{config.DATA.SEED}",
+        "debug_vis_val"
+    )
+
+    evaluator.viz3d = DebugVisualizer3D(
+        out_dir=out_dir,
+        prob=0.02,   # or 1.0 if you want always
+        max_per_epoch=8,
+        show_seg=True,
+    )
+
+    evaluator.add_event_handler(Events.EPOCH_STARTED, lambda eng: evaluator.viz3d.start_epoch())
 
     return evaluator

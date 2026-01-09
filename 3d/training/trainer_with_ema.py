@@ -66,6 +66,7 @@ class RelationformerTrainer(SupervisedTrainer):
         optim_set_to_none: bool = False,
         seg: bool = False,
         alpha_coeff: float = 0.1,
+        ema_relation = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -94,6 +95,7 @@ class RelationformerTrainer(SupervisedTrainer):
         self.config = kwargs.pop('config')
         self.seg = seg
         self.alpha_coeff = alpha_coeff
+        self.ema_relation = ema_relation
 
     def _iteration(self, engine, batchdata):
         images, segs, nodes, edges, z_pos, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4], batchdata[5]
@@ -110,8 +112,14 @@ class RelationformerTrainer(SupervisedTrainer):
         self.network.train()
         self.optimizer.zero_grad()
 
+        # engine.state.epoch and engine.state.iteration exist in Ignite/Monai
         epoch = engine.state.epoch
         iteration = engine.state.iteration
+        epoch_len = engine.state.epoch_length  # Monai sets this
+        max_epochs = self.max_epochs
+
+        if hasattr(self.loss_function, "set_hnm_progress"):
+            self.loss_function.set_hnm_progress(epoch, iteration, epoch_len, max_epochs)
         
         if engine.state.iteration % engine.state.epoch_length == 1:
             print("epoch", engine.state.epoch,
@@ -355,6 +363,12 @@ class RelationformerTrainer(SupervisedTrainer):
 
         losses['total'].backward()        
         self.optimizer.step()
+        
+        if self.ema_relation is not None:
+            # Update from the *actual* student relation head.
+            # self.network might be DDP-wrapped, so unwrap if needed.
+            student_net = self.network.module if hasattr(self.network, "module") else self.network
+            self.ema_relation.update(student_net.relation_embed)
 
         del images
         del segs
@@ -369,7 +383,7 @@ class RelationformerTrainer(SupervisedTrainer):
 
 
 def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
-                  evaluator, config, device, fp16=False, seg=False):
+                  evaluator, config, device, fp16=False, seg=False, ema_relation=None):
     """[summary]
 
     Args:
@@ -403,7 +417,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         CheckpointSaver(
             save_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (config.log.exp_name, config.DATA.SEED),
                                   './models'),
-            save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
+            save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler, "ema_relation": ema_relation.ema},
             save_interval=5,
             n_saved=2,
             epoch_level=True,
@@ -509,11 +523,12 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         key_train_metric=key_train_metric,
         additional_metrics=additional_metrics,
         alpha_coeff=config.TRAIN.ALPHA_COEFF,
+        ema_relation=ema_relation,
         amp=fp16,   # uses operations with 16 bits precision for most operations, but for critical ones still 32 bits
     )
 
     out_dir = os.path.join(
-        'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/visual_di_prova',
+        '/data/scavone/cross-dim_i2g_3d/visual di prova',
         "runs",
         f"{config.log.exp_name}_{config.DATA.SEED}",
         "debug_vis"

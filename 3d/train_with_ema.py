@@ -15,6 +15,7 @@ from data.dataset_vessel3d import build_vessel_data
 from training.evaluator import build_evaluator
 from training.trainer import build_trainer
 from models import build_model
+from models.EMA_model import EMA_Model
 from utils.utils import image_graph_collate
 from models.matcher import build_matcher
 from training.losses import EDGE_SAMPLING_MODE, SetCriterion
@@ -194,13 +195,20 @@ def main(rank=0, args=None):
     else:
         net = build_model(config, pre2d=args.pre2d)
 
-    net_wo_dist = net.to(device)
-    relation_embed = net.relation_embed.to(device)
+    net = net.to(device)
 
     if args.distributed:
-        net = igdist.auto_model(net)
-        relation_embed = igdist.auto_model(relation_embed)
+        net = igdist.auto_model(net)   # wraps net (DDP or similar)
         net_wo_dist = net.module
+    else:
+        net_wo_dist = net
+
+    # Always take relation_embed from the underlying module
+    relation_embed = net_wo_dist.relation_embed
+
+    # EMA model creation (after wrapping so you’re copying the “real” module)
+    ema_decay = getattr(config.TRAIN, 'EMA_DECAY', 0.999)
+    ema_relation = EMA_Model(relation_embed, decay=ema_decay).to(device)
 
     matcher = build_matcher(config, dims=2 if args.pretrain_general else 3)
     
@@ -222,7 +230,8 @@ def main(rank=0, args=None):
         dims=2 if args.pretrain_general else 3,
         num_edge_samples=config.TRAIN.NUM_EDGE_SAMPLES,
         edge_sampling_mode=edge_sampling_mode,
-        domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device)
+        domain_class_weight=torch.tensor(config.TRAIN.DOMAIN_WEIGHTING, device=device),
+        ema_relation_embed=ema_relation
     )
     val_loss = SetCriterion(config, matcher, relation_embed, dims=2 if args.pretrain_general else 3, edge_sampling_mode=EDGE_SAMPLING_MODE.NONE)  # prima era EDGE_SAMPLING_MODE.NONE
 
@@ -315,7 +324,8 @@ def main(rank=0, args=None):
         evaluator,
         config,
         device,
-        seg=args.seg
+        seg=args.seg,
+        ema_relation=ema_relation,
         # fp16=args.fp16,
     )
 
@@ -381,36 +391,26 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     args = parser.parse_args([
-        '--exp_name', 'test_strade',
-        '--config', '3d/configs/roads_only.yaml',
+        '--exp_name', 'pretraining_mixed_synth_upsampled_2',
+        '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
         '--continuous',
-        '--display_prob', '1.0',
+        '--display_prob', '0.0005',
+        # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_3_20/models/checkpoint_key_metric=7.2568.pt',
+        # '--restore_state',
     ])
     
     
     # --- FINETUNING ---
     
     # args = parser.parse_args([
-    #     '--exp_name', 'prova',
-    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/mixed_synth_3D.yaml',
-    #     '--continuous',
-    #     '--display_prob', '0.0',
-    #     # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_3_20/models/checkpoint_key_metric=7.2568.pt',
+    #     '--exp_name', 'finetuning_synth_1',
+    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
+    #     # '--resume', '/data/scavone/cross-dim_i2g_3d/runs/pretraining_mixed_synth_1_20/models/checkpoint_epoch=50.pt',
     #     # '--restore_state',
+    #     # '--no_strict_loading',
+    #     '--continuous',
+    #     '--display_prob', '0.002',
     # ])
-    
-    
-    # --- FINETUNING ---
-    
-    args = parser.parse_args([
-        '--exp_name', 'prova_strade',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
-        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=50.pt',
-        '--restore_state',
-        # '--no_strict_loading',
-        '--continuous',
-        '--display_prob', '0.002',
-    ])
     
 
     if args.parallel:

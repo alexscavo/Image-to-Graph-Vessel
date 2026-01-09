@@ -1,0 +1,638 @@
+import enum
+import random
+import torch
+import torch.nn.functional as F
+from torch import nn
+from boxes import box_ops, box_ops_2D
+import numpy as np
+from utils.utils import downsample_edges, upsample_edges
+
+debug_check = False
+
+class EDGE_SAMPLING_MODE(enum.Enum):
+    NONE = "none"
+    UP = "up"
+    DOWN = "down"
+    RANDOM_UP = "random_up"
+
+
+def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = -1 (no weighting).
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+    Returns:
+        Loss tensor
+    """
+    prob = inputs.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = prob * targets + (1 - prob) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+    return loss.sum()/num_boxes
+
+@torch.no_grad()
+def accuracy(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    if target.numel() == 0:
+        return [torch.zeros([], device=output.device)]
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].view(-1).float().sum(0)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+class SetCriterion(nn.Module):
+    """ This class computes the loss for Graphformer.
+    The process happens in two steps:
+        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
+        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """
+
+    def __init__(self, config, matcher, relation_embed, dims=3, num_edge_samples=9999, edge_sampling_mode=EDGE_SAMPLING_MODE.NONE, domain_class_weight=None, ema_relation_embed=None):
+        """ Create the criterion.
+        Parameters:
+            num_classes: number of object categories, omitting the special no-object category
+            matcher: module able to compute a matching between targets and proposals
+            weight_dict: dict containing as key the names of the losses and as values their relative weight.
+            eos_coef: relative classification weight applied to the no-object category
+            losses: list of all the losses to be applied. See get_loss for list of available losses.
+        """
+        super().__init__()
+        self.matcher = matcher
+        self.relation_embed = relation_embed
+        self.rln_token = config.MODEL.DECODER.RLN_TOKEN
+        self.obj_token = config.MODEL.DECODER.OBJ_TOKEN
+        self.losses = config.TRAIN.LOSSES
+        self.weight_dict = {'boxes':config.TRAIN.W_BBOX,
+                            'class':config.TRAIN.W_CLASS,
+                            'cards':config.TRAIN.W_CARD,
+                            'nodes':config.TRAIN.W_NODE,
+                            'edges':config.TRAIN.W_EDGE,
+                            "domain": config.TRAIN.W_DOMAIN,
+                            }
+        self.dims = dims
+        self.num_edge_samples = num_edge_samples
+        self.edge_sampling_mode = edge_sampling_mode
+        self.sample_ratio = config.TRAIN.EDGE_SAMPLE_RATIO
+        self.sample_ratio_interval = config.TRAIN.EDGE_SAMPLE_RATIO_INTERVAL
+        
+        # --- Hard negative mining scheduling (defaults) ---
+        self.ema_relation_embed = ema_relation_embed
+        self.hard_negative_mining = getattr(config.TRAIN, "HARD_NEGATIVE_MINING", False)
+        self.hnm_hard_fraction_end = float(getattr(config.TRAIN, "HNM_HARD_FRACTION_END", 0.6))        
+        self.hnm_hard_fraction_start = float(getattr(config.TRAIN, "HNM_HARD_FRACTION_START", 0.2))
+        self.hnm_ramp_epochs = int(getattr(config.TRAIN, "HNM_RAMP_EPOCHS", 10))  # ramp over first N epochs
+        self.hnm_warmup_epochs = int(getattr(config.TRAIN, "HNM_WARMUP_EPOCHS", 0))
+        self.hnm_pool_mult = getattr(config.TRAIN, "HNM_POOL_MULT", 2)
+        self.hnm_mode = getattr(config.TRAIN, "HNM_MODE", "top_tk")  # or top_p_uniform or weighted
+        self.hnm_top_p = float(getattr(config.TRAIN, "HNM_TOP_P", 0.3))      # for top_p_uniform
+        self.hnm_temp = float(getattr(config.TRAIN, "HNM_TEMP", 0.5))        # for weighted (temperature)
+
+        # progress state updated by trainer
+        self._hnm_epoch = 1
+        self._hnm_iter = 0
+        self._hnm_epoch_len = 1
+        self._hnm_max_epochs = 1
+
+        
+        if config.DATA.MIXED:
+            self.domain_img_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.IMAGE_ADVERSARIAL else None
+            self.domain_inst_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.GRAPH_ADVERSARIAL else None
+            self.consistency_loss = nn.MSELoss() if config.TRAIN.CONSISTENCY_REGULARIZATION else None
+            print(self.domain_img_loss, self.domain_inst_loss, self.consistency_loss)
+        else:
+            self.domain_img_loss = None
+            self.domain_inst_loss = None
+            self.consistency_loss = None
+            
+            
+    def set_hnm_progress(self, epoch: int, iteration: int, epoch_len: int, max_epochs: int):
+        self._hnm_epoch = int(epoch)
+        self._hnm_iter = int(iteration)
+        self._hnm_epoch_len = max(1, int(epoch_len))
+        self._hnm_max_epochs = max(1, int(max_epochs))
+        
+    
+    def _get_scheduled_hard_fraction(self) -> float:
+        """
+        Linear ramp of hard fraction:
+        - 0 during warmup epochs (optional)
+        - then linearly from start -> end over hnm_ramp_epochs
+        - then stays at end
+        """
+        e = self._hnm_epoch
+        if e <= self.hnm_warmup_epochs:
+            return 0.0
+
+        # epoch progress inside ramp window
+        ramp_e = max(1, self.hnm_ramp_epochs)
+        t = min(1.0, (e - self.hnm_warmup_epochs - 1) / ramp_e)
+        return float(self.hnm_hard_fraction_start + t * (self.hnm_hard_fraction_end - self.hnm_hard_fraction_start))
+
+    
+    @torch.no_grad()     
+    def select_hard_negative_edges(
+        self,
+        neg_edges: torch.Tensor,
+        take_neg: int,
+        rearranged_object_token: torch.Tensor,
+        relation_token_batch: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+        """
+        Selects hard negative edges from a set of candidate negative edges.
+
+        Args:
+            neg_edges (torch.Tensor): Set of all negative edges from which hard negatives will be selected.
+            take_neg (int): Number of negative edges to select.
+            rearranged_object_token (torch.Tensor): Object token features arranged according to matcher indices.
+            relation_token_batch (torch.Tensor | None): Relation token features for the current batch item.
+
+        Returns:
+            torch.Tensor: Selected negative edges of shape (take_neg, 2).
+        """
+        
+        # --- dimension checks ---
+        assert neg_edges.ndim == 2 and neg_edges.size(1) == 2, f"neg_edges must be [N,2], got {tuple(neg_edges.shape)}"
+        assert neg_edges.dtype in (torch.int64, torch.int32), f"neg_edges must be integer type, got {neg_edges.dtype}"
+        assert rearranged_object_token.ndim == 2, f"rearranged_object_token must be [Q,D], got {tuple(rearranged_object_token.shape)}"
+        assert take_neg >= 0, f"take_neg must be >= 0, got {take_neg}"
+        
+        device = neg_edges.device
+        n_all = int(neg_edges.size(0))  # total number of available negative edges for the sample
+        
+        if take_neg == 0 or n_all == 0:
+            return neg_edges.new_zeros((0, 2))
+        
+        take_neg = min(take_neg, n_all) # we can't select more negative edges than available
+        
+        # if EMA model is not present or HNM is disabled, fall back to random sampling
+        if self.ema_relation_embed is None or self.hard_negative_mining is False:
+            
+            idx = torch.randperm(n_all, device=device)[:take_neg]
+            sel = neg_edges[idx, :]
+            
+            # shuffle edges for undirected edge
+            shuffle = torch.rand((sel.size(0),), device=device) > 0.5
+            sel[shuffle] = sel[shuffle][:, [1, 0]]
+            
+            return sel
+        
+        # --- candidate pool ---
+        pool_mult = max(1.0, float(self.hnm_pool_mult))
+        candidate_pool_size = min(n_all, int(round(pool_mult * take_neg)))
+        cand_idx = torch.randperm(n_all, device=device)[:candidate_pool_size]
+        cand_edges = neg_edges[cand_idx]
+        
+        # random shuffling for undirected edges
+        shuffle = torch.rand((cand_edges.sie(0),), device=device) > 0.5
+        cand_edges[shuffle] = cand_edges[shuffle][:, [1, 0]]
+        
+        # now we need to build relation_features for EMA scoring (matches loss_edges construction)
+        # first we select the object tokens for each edge (i, j)
+        tok_i = rearranged_object_token[cand_edges[:, 0], :]    # embedding endpoint i 
+        tok_j = rearranged_object_token[cand_edges[:, 1], :]    # embedding endpoint j
+        
+        if self.rln_token > 0:
+            assert relation_token_batch is not None, "relation_token_batch required when self.rln_token > 0"
+            
+            # flatten the relation token if used
+            rel_flat = relation_token_batch.reshape(-1).unsqueeze(0).repeat(cand_edges.size(0), 1)
+            
+            # concatenate the relation token to the endpoint/bbject tokens
+            relation_feature = torch.cat([tok_i, tok_j, rel_flat], dim=1)
+        else:
+            relation_feature = torch.cat([tok_i, tok_j], dim=1)
+            
+        # --- EMA scoring ---
+        logits = self.ema_relation_embed(relation_feature)  # logits for each negative edge in cand_size
+        assert logits.ndim == 2 and logits.size(1) == 2, f"EMA logits must be [N,2], got {tuple(logits.shape)}"
+        scores = torch.softmax(logits, dim=1)[:, 1]     # confidence score for POSITIVE edge (the model think it's positive but it's not in reality)
+    
+        # --- scheduled hard fraction ---
+        hard_frac = self._get_scheduled_hard_fraction()
+        hard_k = int(round(hard_frac * take_neg))   # how many hard negatives
+        hard_k = max(0, min(hard_k, take_neg))
+        soft_k = take_neg - hard_k                  # how many soft negatives
+        
+        # --- pick negatives according to HNM mode ---
+        if self.hnm_mode == "weighted":
+            # Weighted sampling over the *entire* candidate pool:
+            # directly pick take_neg edges (no hard/soft split).
+            T = max(1e-6, float(self.hnm_temp))
+            # exp(score / T), stabilized
+            w = torch.exp((scores - scores.max()) / T) + 1e-12
+
+            k = min(take_neg, candidate_pool_size)
+            sel_idx_in_cand = torch.multinomial(w, num_samples=k, replacement=False)
+            selected = cand_edges[sel_idx_in_cand]
+
+        else:
+            # Hard/soft split for non-weighted modes (top_k, top_p_uniform, ...)
+            # --- pick hard: according to HNM mode ---
+            if hard_k > 0:
+                if self.hnm_mode == "top_k":
+                    # select the top hard_k edges from the candidate pool
+                    hard_idx_in_cand = torch.topk(
+                        scores, k=min(hard_k, candidate_pool_size), largest=True
+                    ).indices
+
+                elif self.hnm_mode == "top_p_uniform":
+                    # inside the candidate pool select a random fraction of hard negatives
+                    top_p = max(0.0, min(1.0, float(self.hnm_top_p)))
+                    hard_set_size = max(1, int(round(top_p * candidate_pool_size)))
+                    hard_set_size = min(hard_set_size, candidate_pool_size)
+
+                    # indices of the top hard_set_size scores (not necessarily the final hard_k)
+                    hard_set_idx = torch.topk(scores, k=hard_set_size, largest=True).indices
+
+                    # now uniformly sample out of this hard set (without replacement)
+                    if hard_set_size >= hard_k:
+                        perm = torch.randperm(hard_set_size, device=device)[:hard_k]
+                        hard_idx_in_cand = hard_set_idx[perm]
+                    else:
+                        # if hard_set_size < hard_k, take all and later fill if needed
+                        hard_idx_in_cand = hard_set_idx
+
+                else:
+                    raise ValueError(f"Unknown HNM_MODE: {self.hnm_mode}")
+
+                hard_edges = cand_edges[hard_idx_in_cand]
+
+                # the remaining indices are for the soft sampling
+                mask = torch.ones((candidate_pool_size,), dtype=torch.bool, device=device)
+                mask[hard_idx_in_cand] = False
+                remaining_edges = cand_edges[mask]
+            else:
+                hard_edges = cand_edges.new_zeros((0, 2))
+                remaining_edges = cand_edges
+
+            # --- pick soft: random from remaining ---
+            if soft_k > 0:
+                n_rem = int(remaining_edges.size(0))
+                if n_rem >= soft_k:
+                    soft_idx = torch.randperm(n_rem, device=device)[:soft_k]
+                    soft_edges = remaining_edges[soft_idx]
+                else:
+                    soft_edges = remaining_edges
+                    need = soft_k - n_rem
+                    filler_src = hard_edges if hard_edges.size(0) > 0 else cand_edges
+                    fill_idx = torch.randperm(int(filler_src.size(0)), device=device)[:need]
+                    soft_edges = torch.cat([soft_edges, filler_src[fill_idx]], dim=0)
+            else:
+                soft_edges = cand_edges.new_zeros((0, 2))
+
+            selected = torch.cat([hard_edges, soft_edges], dim=0)
+
+        # Safety: ensure exact count == take_neg (important for downstream concatenation)
+        if selected.size(0) > take_neg:
+            selected = selected[:take_neg]
+        elif selected.size(0) < take_neg:
+            need = take_neg - selected.size(0)
+            extra_idx = torch.randperm(candidate_pool_size, device=device)[:need]
+            selected = torch.cat([selected, cand_edges[extra_idx]], dim=0)
+            
+        # final undirected shuffle (optional; keep consistent with original behavior)
+        shuffle2 = torch.rand((selected.size(0),), device=device) > 0.5
+        selected[shuffle2] = selected[shuffle2][:, [1, 0]]    
+        
+
+        return selected
+        
+        
+        
+        
+        
+        
+            
+
+    def loss_class(self, outputs, indices):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        weight = torch.tensor([0.25, 0.75]).to(outputs.get_device())
+        
+        idx = self._get_src_permutation_idx(indices)
+
+        # targets = torch.zeros(outputs.shape[:-1], dtype=outputs.dtype).to(outputs.get_device())
+        # targets[idx] = 1.0
+        
+        # targets = targets.unsqueeze(-1)
+        
+        # num_nodes = targets.sum()
+        # # loss = F.cross_entropy(outputs.permute(0,2,1), targets, weight=weight, reduction='mean')
+        # loss = sigmoid_focal_loss(outputs, targets, num_nodes)
+        
+        targets = torch.zeros(outputs[...,0].shape, dtype=torch.long).to(outputs.get_device())
+        targets[idx] = 1.0
+        
+        # DEBUG
+        if debug_check:
+            with torch.no_grad():
+                num_pos = (targets == 1).sum().item()
+                num_neg = (targets == 0).sum().item()
+                print(f"\n[LOSS_CLASS] num_pos={num_pos}, num_neg={num_neg}")
+        
+        loss = F.cross_entropy(outputs.permute(0,2,1), targets, weight=weight, reduction='mean')
+        
+        # cls_acc = 100 - accuracy(outputs, targets_one_hot)[0]
+        return loss
+    
+    def loss_cardinality(self, outputs, indices):
+        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
+        """
+        idx = self._get_src_permutation_idx(indices)
+        targets = torch.zeros(outputs[...,0].shape, dtype=torch.long).to(outputs.get_device())
+        targets[idx] = 1.0
+        
+        tgt_lengths = torch.as_tensor([t.sum() for t in targets], device=outputs.device)
+        # Count the number of predictions that are NOT "no-object" (which is the last class)
+        card_pred = (outputs.argmax(-1) == outputs.shape[-1] - 1).sum(1)
+        # card_pred = (outputs.sigmoid()>0.5).squeeze(-1).sum(1)
+
+        loss = F.l1_loss(card_pred.float(), tgt_lengths.float(), reduction='sum')/(outputs.shape[0]*outputs.shape[1])
+
+        return loss
+
+    def loss_nodes(self, outputs, targets, indices):
+        """Classification loss (NLL)
+        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        """
+        num_nodes = sum(len(t) for t in targets)
+        
+        idx = self._get_src_permutation_idx(indices)
+        
+        if debug_check:
+            print(f"[LOSS_NODES] num_nodes_gt={num_nodes}, num_matched={idx[0].numel()}") # DEBUG
+        
+        pred_nodes = outputs[idx]
+        target_nodes = torch.cat([t[i] for t, (_, i) in zip(targets, indices)], dim=0)
+        loss = F.l1_loss(pred_nodes, target_nodes, reduction='none') # TODO: check detr for loss function
+
+        loss = loss.sum() / num_nodes
+
+        return loss
+    
+    def loss_boxes(self, outputs, targets, indices):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        num_boxes = sum(len(t) for t in targets)
+        idx = self._get_src_permutation_idx(indices)
+        src_boxes = outputs[idx]
+        target_boxes = torch.cat([t[i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_boxes = torch.cat([target_boxes, 0.2*torch.ones(target_boxes.shape, device=target_boxes.device)], dim=-1)
+
+        if (src_boxes.shape[1] == 6):
+            loss = 1 - torch.diag(box_ops.generalized_box_iou_3d(
+                box_ops.box_cxcyczwhd_to_xyxyzz(src_boxes),
+                box_ops.box_cxcyczwhd_to_xyxyzz(target_boxes)))
+        elif (src_boxes.shape[1] == 4):
+            loss = 1 - torch.diag(box_ops_2D.generalized_box_iou(
+                box_ops_2D.box_cxcywh_to_xyxy(src_boxes),
+                box_ops_2D.box_cxcywh_to_xyxy(target_boxes)))
+        else:
+            print(f"dim error: {src_boxes.shape}")
+
+        loss = loss.sum() / num_boxes
+        return loss
+
+    def loss_edges(self, h, target_nodes, target_edges, indices):
+        """Compute the losses related to the masks: the focal loss and the dice loss.
+           targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
+        """
+
+        # all token except the last one is object token
+        object_token = h[...,:self.obj_token,:]
+        
+        # last token is relation token
+        if self.rln_token>0:
+            relation_token = h[...,self.obj_token:self.obj_token+self.rln_token,:]
+        
+        # map the ground truth edge indices by the matcher ordering
+        target_edges = [[t for t in tgt if t[0].cpu() in i and t[1].cpu() in i] for tgt, (_, i) in zip(target_edges, indices)]
+        target_edges = [torch.stack(t, 0) if len(t)>0 else torch.zeros((0,2), dtype=torch.long).to(h.device) for t in target_edges]
+
+        new_target_edges = []
+        for t, (_, i) in zip(target_edges, indices):
+            tx = t.clone().detach()
+            for idx, k in enumerate(i):
+                t[tx==k]=idx
+            new_target_edges.append(t)
+
+        # all_edges = []
+        edge_labels = []
+        relation_feature = []
+        
+        # loop through each of batch to collect the edge and node
+        for batch_id, (pos_edge, n) in enumerate(zip(new_target_edges, target_nodes)):
+            
+            if debug_check:
+                print(f"[LOSS_EDGES] batch {batch_id}: n_nodes={n.shape[0]}, pos_edges_gt={pos_edge.shape[0]}")     # DEBUG
+            
+            # map the predicted object token by the matcher ordering
+            rearranged_object_token = object_token[batch_id, indices[batch_id][0],:]
+            
+            # find the -ve edges for training
+            full_adj = torch.ones((n.shape[0],n.shape[0]))-torch.diag(torch.ones(n.shape[0]))
+            full_adj[pos_edge[:,0],pos_edge[:,1]]=0
+            full_adj[pos_edge[:,1],pos_edge[:,0]]=0
+            neg_edges = torch.nonzero(torch.triu(full_adj))
+            
+            if debug_check:
+                print(f"[LOSS_EDGES] batch {batch_id}: neg_edges_before_sampling={neg_edges.shape[0]}")     # DEBUG
+            
+            # shuffle edges for undirected edge
+            shuffle = np.random.randn((pos_edge.shape[0]))>0
+            pos_edge[shuffle,:] = pos_edge[shuffle,:][:,[1,0]]
+
+            # restrict unbalance in the +ve/-ve edge
+            if self.edge_sampling_mode == EDGE_SAMPLING_MODE.NONE and pos_edge.shape[0]>40:
+                # print('Reshaping')
+                pos_edge = pos_edge[:40,:]
+            
+                # random sample -ve edge
+                idx_ = torch.randperm(neg_edges.shape[0])
+                neg_edges = neg_edges[idx_, :].to(pos_edge.device)
+                # shuffle edges for undirected edge
+                shuffle = np.random.randn((neg_edges.shape[0]))>0
+                neg_edges[shuffle,:] = neg_edges[shuffle,:][:,[1,0]]
+            
+            # check whether the number of -ve edges are within limit 
+            if self.num_edge_samples-pos_edge.shape[0]<neg_edges.shape[0]:
+                take_neg = self.num_edge_samples-pos_edge.shape[0]
+                total_edge = self.num_edge_samples
+            else:
+                take_neg = neg_edges.shape[0]
+                total_edge = pos_edge.shape[0]+neg_edges.shape[0]
+                
+            selected_neg_edges = self.select_hard_negative_edges(
+                neg_edges.to(pos_edge.device),
+                take_neg,
+                rearranged_object_token,
+                relation_token_batch=(relation_token[batch_id, :] if self.rln_token > 0 else None),
+            )    
+                
+            all_edges_ = torch.cat((pos_edge, selected_neg_edges), 0)
+            # all_edges.append(all_edges_)
+            edge_labels.append(torch.cat((torch.ones(pos_edge.shape[0], dtype=torch.long), torch.zeros(take_neg, dtype=torch.long)), 0))
+            
+            # concatenate object token pairs with relation token
+            if self.rln_token>0:
+                relation_feature.append(torch.cat((rearranged_object_token[all_edges_[:,0],:],rearranged_object_token[all_edges_[:,1],:],relation_token[batch_id,...].flatten().unsqueeze(0).repeat(total_edge,1)), 1))
+            else:
+                relation_feature.append(torch.cat((rearranged_object_token[all_edges_[:,0],:],rearranged_object_token[all_edges_[:,1],:]), 1))
+
+        # [print(e,l) for e,l in zip(all_edges, edge_labels)]
+
+        # torch.tensor(list(itertools.combinations(range(n.shape[0]), 2))).to(e.get_device())
+        relation_feature = torch.cat(relation_feature, 0)
+        edge_labels = torch.cat(edge_labels, 0).to(h.get_device())
+        
+        if debug_check:
+            num_pos_edges = (edge_labels == 1).sum().item()
+            num_neg_edges = (edge_labels == 0).sum().item()
+            print(f"[LOSS_EDGES] total_pos={num_pos_edges}, total_neg={num_neg_edges}") # DEBUG
+
+        relation_pred = self.relation_embed(relation_feature)
+
+        # valid_edges = torch.argmax(relation_pred, -1)
+        # print('valid_edge number', valid_edges.sum())
+
+        if self.edge_sampling_mode == EDGE_SAMPLING_MODE.UP:
+            relation_pred, edge_labels = \
+                upsample_edges(relation_pred, edge_labels, self.sample_ratio, self.sample_ratio_interval)
+        elif self.edge_sampling_mode == EDGE_SAMPLING_MODE.DOWN:
+            relation_pred, edge_labels = \
+                downsample_edges(relation_pred, edge_labels, self.sample_ratio, self.sample_ratio_interval)
+        elif self.edge_sampling_mode == EDGE_SAMPLING_MODE.RANDOM_UP:
+            ratio = np.random.uniform(self.sample_ratio, 1.0)
+            relation_pred, edge_labels = \
+                upsample_edges(relation_pred, edge_labels, ratio, self.sample_ratio_interval)
+
+        loss = F.cross_entropy(relation_pred, edge_labels, reduction='mean')
+
+        # print(f"[LOSS_EDGES_VALUE] {loss.item():.4f}")
+
+        return loss
+
+    def _get_src_permutation_idx(self, indices):
+        # permute predictions following indices
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+
+    def _get_tgt_permutation_idx(self, indices):
+        # permute targets following indices
+        batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
+        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+        return batch_idx, tgt_idx
+    
+    def loss_domains(self, img_preds, img_labels, instance_preds, instance_labels):
+        """
+        Implements the loss term from "Domain Adaptive Faster R-CNN for Object Detection in the Wild" (https://arxiv.org/abs/1803.03243)
+        This loss term is used to train the domain classifier
+            Arguments:
+                img_preds: predictions for the image-level domain classification
+                img_labels: ground truth labels for the image-level domain classification
+                instance_preds: predictions for the instance-level domain classification
+                instance_labels: ground truth labels for the instance-level domain classification
+            Returns: 
+                the loss term for the domain classifier
+        """
+        domain_loss = 0
+        img_preds, non_reverse_img_pred = img_preds
+        instance_preds, non_reverse_instance_preds = instance_preds
+        
+        if self.domain_img_loss is not None:
+            domain_loss += self.domain_img_loss(img_preds, torch.flatten(img_labels))
+        if self.domain_inst_loss is not None:
+            domain_loss += self.domain_inst_loss(instance_preds, instance_labels)
+        if self.domain_img_loss is not None and self.domain_inst_loss  is not None and self.consistency_loss is not None:
+            # Consistency regularization
+            # Build the average over all feature positions fro each sample in img predictions
+            # Reversing the flattening operation
+            non_reverse_img_pred = torch.reshape(non_reverse_img_pred, (instance_labels.shape[0], -1, 2))
+            mean_non_reverse_img_pred = torch.mean(non_reverse_img_pred, dim=1) # Take the mean over all feature positions
+            domain_loss += self.consistency_loss(mean_non_reverse_img_pred, non_reverse_instance_preds)
+
+        return domain_loss
+
+
+    def forward(self, h, out, target, pred_backbone_domains, pred_instance_domains):
+        """ This performs the loss computation.
+        Parameters:
+             outputs: dict of tensors, see the output specification of the model for the format
+             targets: list of dicts, such that len(targets) == batch_size.
+                      The expected keys in each dict depends on the losses applied, see each loss' doc
+        """
+
+        # Retrieve the matching between the outputs of the last layer and the targets
+        indices = self.matcher(out, target)
+        
+        # DEBUG START
+        if debug_check:
+            for b, (src_idx, tgt_idx) in enumerate(indices):
+                n_matched = len(src_idx)
+                n_gt = target['nodes'][b].shape[0]
+                n_pred_total = out['pred_logits'].shape[1]
+                
+                if n_matched == 0:
+                    print(f"⚠️  Batch {b}: ZERO MATCHES! GT has {n_gt} nodes")
+                elif n_matched < n_gt * 0.5:
+                    print(f"⚠️  Batch {b}: Low match rate: {n_matched}/{n_gt} ({100*n_matched/n_gt:.1f}%)")
+                
+                # Check predicted class distribution
+                pred_classes = torch.argmax(out['pred_logits'][b], -1)
+                n_pred_obj = (pred_classes == 1).sum().item()
+                print(f"   Batch {b}: {n_pred_obj}/{n_pred_total} queries classified as objects")
+            
+            print("\n[MATCHER] batch stats")
+            total_pos = 0
+            if random.random() < 0.01:
+                print(f"\n[4. INFERENCE RESULTS]")
+                N = 1  # number of samples you want to inspect
+                for i in range(min(N, len(indices))):
+                    print(f"  sample {b}: matched {len(src_idx)} preds to {len(tgt_idx)} GT nodes")
+                    total_pos += len(src_idx)
+            print(f"  total matched preds in batch: {total_pos}")
+            
+        # DEBUG END
+        
+        losses = {}
+        losses['class'] = self.loss_class(out['pred_logits'], indices)
+        losses['nodes'] = self.loss_nodes(out['pred_nodes'][...,:self.dims], target['nodes'], indices)
+        losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
+        losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
+        losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
+        if self.domain_img_loss or self.domain_inst_loss:
+            losses['domain'] = self.loss_domains(pred_backbone_domains, target['interpolated_domains'], pred_instance_domains, target['domains'])
+        else:
+            losses['domain'] = 0
+
+        
+        losses['total'] = sum([losses[key]*self.weight_dict[key] for key in self.losses])
+
+        return losses

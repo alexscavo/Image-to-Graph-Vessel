@@ -1,3 +1,4 @@
+import sys
 from data.dataset_synth_octa_network import build_octa_network_data
 import torch
 from torch.utils.data import ConcatDataset, WeightedRandomSampler
@@ -30,17 +31,20 @@ def build_mixed_data(config, mode='split', split=0.95, use_grayscale=False, debu
     num_samples_B = len(target_train_data)
 
     # Calculate the weights for each sample in each dataset
+    # TODO: if sample proportion remains ~ 99000 to 4000, this weighting possibly leads to high overfitting
+    target_multiplier = num_samples_A / num_samples_B
     weights_A = torch.ones(num_samples_A)
-    weights_B = torch.ones(num_samples_B) * (num_samples_A / num_samples_B)
+    weights_B = torch.ones(num_samples_B) * target_multiplier
 
     train_ds = ConcatDataset([source_train_data, target_train_data])
     val_ds = ConcatDataset([source_val_data, target_val_data])
 
-    print(f"samples A: {num_samples_A}")
-    print(f"samples B: {num_samples_B}")
-    print(f"weight sum a: {torch.sum(weights_A)}")
-    print(f"weight sum B: {torch.sum(weights_B)}")
-
+    print(f"--- Dataset Balance Info ---")
+    print(f"Source samples (A): {num_samples_A}")
+    print(f"Target samples (B): {num_samples_B}")
+    print(f"Oversampling Factor for Target: {target_multiplier:.2f}x")
+    print(f"Total Combined Samples in ConcatDataset: {len(train_ds)}")
+    
     if upsample_target_domain:
         print("upsampling")
         sampler = WeightedRandomSampler(torch.cat([weights_A, weights_B]), num_samples=math.floor(torch.sum(weights_A) + torch.sum(weights_B)))

@@ -239,9 +239,9 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
         )
         return ds
     elif mode == 'test':
-        img_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
-        seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'seg')
-        vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'vtp')
+        img_folder = os.path.join(config.DATA.SOURCE_DATA_PATH, 'test/raw')
+        seg_folder = os.path.join(config.DATA.SOURCE_DATA_PATH, 'test/seg')
+        vtk_folder = os.path.join(config.DATA.SOURCE_DATA_PATH, 'test/vtp')
         img_files = []
         vtk_files = []
         seg_files = []

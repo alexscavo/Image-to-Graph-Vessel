@@ -88,7 +88,7 @@ TRAIN:
     IMAGE_ADVERSARIAL: True
     GRAPH_ADVERSARIAL: True
     CONSISTENCY_REGULARIZATION: True
-    ALPHA_COEFF: 1.0
+    ALPHA_COEFF: 0.6    # 1.0
     
     UPSAMPLE_TARGET_DOMAIN: True
 
@@ -113,12 +113,12 @@ TRAIN:
     EDGE_SAMPLING_MODE: "up"
     EDGE_SAMPLE_RATIO: 0.15
     EDGE_SAMPLE_RATIO_INTERVAL: 0.02
-    W_BBOX: 2.0
+    W_BBOX: 3.0
     W_CLASS: 4.0 # 3.0
     W_CARD: 0.8 # 1.0
     W_NODE: 2.0 # 2.0
     W_EDGE: 6.0 # 4.0
-    W_DOMAIN: 1.0   # valore completamente arbitrario
+    W_DOMAIN: 0.1   # valore completamente arbitrario
 
 log:
     exp_name: "repl_new-repo"

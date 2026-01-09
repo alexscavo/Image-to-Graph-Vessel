@@ -50,9 +50,9 @@ def main(args):
     device = torch.device("cuda") if args.device=='cuda' else torch.device("cpu")
     config.display_prob = args.display_prob
 
-    nifti_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/raw')
-    seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/seg')
-    vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'test/vtp')
+    nifti_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'train/raw')
+    seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'train/seg')
+    vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'train/vtp')
     nifti_files = []
     vtk_files = []
     seg_files = []
@@ -69,7 +69,7 @@ def main(args):
     loader = DataLoader(
         dataset,
         batch_size=config.DATA.BATCH_SIZE,
-        shuffle=False,
+        shuffle=True,
         num_workers=config.DATA.NUM_WORKERS,
         collate_fn=lambda x:
         image_graph_collate(x, gaussian_augment=config.DATA.MIXED),
@@ -81,9 +81,14 @@ def main(args):
         net = build_model(config).to(device)
     
     # print('Loading model from:', args.model)
-    checkpoint = torch.load(args.model, map_location='cpu')
+    checkpoint = torch.load(args.model, map_location=device)
     net.load_state_dict(checkpoint['net'], strict=not args.no_strict_loading)
     net.eval()  # Put the CNN in evaluation mode
+    
+    #check if params require grad
+    # for name, param in net.named_parameters():
+    #     if param.requires_grad:
+    #         print(f"Param {name} requires grad")
     
     t_start = time.time()
     sinkhorn_distance = SinkhornDistance(eps=1e-7, max_iter=100)
@@ -104,10 +109,8 @@ def main(args):
     folds_edge_mAP = []
     folds_edge_mAR = []
     
-    out_dir = os.path.join(
-        f"/data/scavone/cross-dim_i2g_3d/visual di prova/{args.exp_name}",
-        "test_vis"
-    )
+    out_dir = f"/data/scavone/cross-dim_i2g_3d/visual di prova/test_vis/{args.exp_name}"
+    
     os.makedirs(out_dir, exist_ok=True)
     viz = DebugVisualizer3D(out_dir=out_dir, prob=config.display_prob)  # prob=1.0 since we handle prob here
     viz.start_epoch()
@@ -123,7 +126,7 @@ def main(args):
         
         # # inputs, targets = self.get_batch(batchdata, image_keys=IMAGE_KEYS, label_keys="label")
         # # inputs = torch.cat(inputs, 1)
-        images = images.to(device,  non_blocking=False)
+        images = images.to(device,  non_blocking=False).float()
         segs = segs.to(device,  non_blocking=False)
         nodes = [node.to(device,  non_blocking=False) for node in nodes]
         boxes = [torch.cat([node, 0.2*torch.ones(node.shape, device=node.device)], dim=-1) for node in nodes]
@@ -134,7 +137,7 @@ def main(args):
         if args.seg:
             h, out, _, _, _, _ = net(segs.type(torch.FloatTensor).to(device), z_pos, domain_labels=domains)
         else:
-            h, out, _, _, _, _ = net(images.type(torch.FloatTensor).to(device), z_pos, domain_labels=domains)
+            h, out, _, _, _, _ = net(images, z_pos, domain_labels=domains)
 
         out = relation_infer(h.detach(), out, net, config.MODEL.DECODER.OBJ_TOKEN, config.MODEL.DECODER.RLN_TOKEN, apply_nms=False)
         
@@ -172,6 +175,7 @@ def main(args):
                 else:
                     pred_edge_boxes = []
                     edge_boxes_class = []
+                    
                 # boxes_scores = [np.ones(boxes[0].shape[0])]
 
                 # Calculate betti numbers
@@ -186,9 +190,7 @@ def main(args):
                 # G2.add_edges_from([(e[0].item(), e[1].item()) for e in pred_edges])
                 # connected_components = len(list(nx.connected_components(G2)))
                 # beta_pred = np.array([connected_components, len(G2.edges) + connected_components - len(G2.nodes)])
-                # beta_errors.append(2 * np.abs(beta_pred - beta_gt) / (beta_gt + beta_pred + 1e-10))
-                
-                
+                # beta_errors.append(2 * np.abs(beta_pred - beta_gt) / (beta_gt + beta_pred + 1e-10))                
 
                 if debug_use_gt_as_pred:
                     # Numpy everywhere, consistent with your code
@@ -283,7 +285,7 @@ def main(args):
                     viz.start_epoch()
                     current_fold += 1
                     
-                    print(f'fold_node_mAP: {folds_node_mAP[0]}')
+                    print(f'fold_node_mAP: {folds_node_mAP[-1]}')
 
 
     # print metrics
@@ -295,8 +297,8 @@ def main(args):
     node_mAR_std = torch.tensor(folds_node_mAR).std()
     edge_mAP = torch.tensor(folds_edge_mAP).mean()
     edge_mAP_std = torch.tensor(folds_edge_mAP).std()
-    edge_mAR = torch.tensor(folds_edge_mAR).mean()
-    edge_mAR_std = torch.tensor(folds_edge_mAR).std()
+    edge_mAR = torch.tensor(folds_edge_mAR, dtype=torch.float32).mean()
+    edge_mAR_std = torch.tensor(folds_edge_mAR, dtype=torch.float32).std()
 
     print("smd: ", torch.tensor(folds_smd).mean())
     print("smd std: ", torch.tensor(folds_smd).std())
@@ -352,7 +354,7 @@ def main(args):
 if __name__ == '__main__':
     
     parser = ArgumentParser()
-    #TODO the same confg is used for all the models at the moment
+
     parser.add_argument('--config',
                         default=None,
                         help='config file (.yml) containing the hyper-parameters for training. '
@@ -373,14 +375,14 @@ if __name__ == '__main__':
 
 
     args = parser.parse_args([
-        '--exp_name', 'prova',
+        '--exp_name', 'finetuning_mixed_3',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/synth_3D.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_1_20/models/checkpoint_epoch=100.pt',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/finetuning_mixed_synth_3_20/models/checkpoint_epoch=100.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples', '5000',
         '--eval',
         '--no_strict_loading',
-        '--display_prob', '0.0018'
+        '--display_prob', '0.002'
     ])
     
     main(args)
