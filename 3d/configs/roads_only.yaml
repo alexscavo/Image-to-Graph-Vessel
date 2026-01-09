@@ -2,11 +2,11 @@ DATA:
     DIM: 3 # data dimension
     BATCH_SIZE: 32 # 48 Batch size for a single GPU, could be overwritten by command line argument
     DATA_PATH: ""
-    SOURCE_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
-    TARGET_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
+    SOURCE_DATA_PATH: "/data/scavone/20cities/patches_mie"
+    TARGET_DATA_PATH: "/data/scavone/20cities/patches_mie"
     NUM_SOURCE_SAMPLES: 8000  # all
     NUM_TARGET_SAMPLES: 1000 # train + validation
-    TEST_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new"
+    TEST_DATA_PATH: "/data/scavone/20cities/patches_mie"
     DATASET: "road_dataset" # Dataset name
     IMG_SIZE: [64, 64, 64] # Input image size
     PAD_SIZE: [5, 5, 5]    # [5, 5, 5]

@@ -522,9 +522,9 @@ if __name__ == "__main__":
     parser.add_argument("--display_prob", type=float, default=0.0018)
 
     args = parser.parse_args([
-        '--exp_name', 'prova_strade',
+        '--exp_name', 'prova_strade_mie',
         '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
-        '--model', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=150.pt',
+        '--model', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_mie_20/models/checkpoint_epoch=150.pt',
         '--out_path', '/data/scavone/cross-dim_i2g_3d/test_results',
         '--max_samples_test', '5000',
         '--max_samples_val', '1000',
