@@ -32,11 +32,11 @@ import shutil
 # USER CONFIG
 # =========================
 
-INPUT_ROOT = Path("C:/Users/Utente/Desktop/tesi/datasets/20cities/patches")   # contains train/, test/, val/...
-OUTPUT_ROOT = Path("C:/Users/Utente/Desktop/tesi/datasets/20cities/patches_new")           # will be created next to where you run this
+INPUT_ROOT = Path("/data/scavone/20cities/patches_mie")   # contains train/, test/, val/...
+OUTPUT_ROOT = Path("/data/scavone/20cities/patches_mie")           # will be created next to where you run this
 SPLITS = ["train", "test", "val"]
 
-COPY_FILES = True   # True=copy, False=move (move will remove originals!)
+COPY_FILES = False   # True=copy, False=move (move will remove originals!)
 DRY_RUN = False     # True=print actions only
 
 # If a trio is incomplete, what to do?

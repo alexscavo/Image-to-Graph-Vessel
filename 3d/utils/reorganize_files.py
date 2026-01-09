@@ -2,12 +2,13 @@
 
 from pathlib import Path
 import shutil
+from tqdm import tqdm
 
 # =========================
 # USER CONFIG
 # =========================
 
-ROOT_DIR = Path("C:/Users/Utente/Desktop/tesi/datasets/20cities/patches")
+ROOT_DIR = Path("/data/scavone/20cities/patches_mie")
 SPLITS = ["train", "test", "val"]
 MOVE_FILES = True   # True = move, False = copy
 DRY_RUN = False     # True = preview only
@@ -32,7 +33,8 @@ def process_split(split_dir: Path):
 
     moved = skipped = ignored = 0
 
-    for f in raw_dir.iterdir():
+    files = list(raw_dir.iterdir())
+    for f in tqdm(files, desc=f"Processing {split_dir.name}", unit="file"):
         if not f.is_file():
             continue
 

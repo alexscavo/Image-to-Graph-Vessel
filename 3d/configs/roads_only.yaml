@@ -104,7 +104,7 @@ TRAIN:
     OPTIMIZER.EPS: 1e-8 # Optimizer Epsilon
     OPTIMIZER.BETAS: (0.9, 0.999) # Optimizer Betas
     OPTIMIZER.MOMENTUM: 0.9 # SGD momentum
-    SAVE_PATH: "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
+    SAVE_PATH: "/data/scavone/cross-dim_i2g_3d" # save path for the checkpoint, log and val results
     VAL_INTERVAL: 20 # validation interval
     SAVE_VAL: False # save validation data
 

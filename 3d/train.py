@@ -381,10 +381,10 @@ if __name__ == '__main__':
     # --- PRE-TRAINING ---
     
     args = parser.parse_args([
-        '--exp_name', 'test_strade',
+        '--exp_name', 'prova_strade_mie',
         '--config', '3d/configs/roads_only.yaml',
         '--continuous',
-        '--display_prob', '1.0',
+        '--display_prob', '0.001',
     ])
     
     
