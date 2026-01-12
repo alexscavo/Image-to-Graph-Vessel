@@ -155,7 +155,7 @@ def test(args):
     print('fold size:', fold_size)
     
     out_dir = os.path.join(
-        "/data/scavone/cross-dim_i2g_2d/visual di prova",
+        "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/visual_di_prova",
         "test_vis",
         args.exp_name
     )

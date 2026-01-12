@@ -29,7 +29,7 @@ class RelationformerTrainer(SupervisedTrainer):
         nodes = [node.to(engine.state.device,  non_blocking=False) for node in nodes]
         edges = [edge.to(engine.state.device,  non_blocking=False) for edge in edges]
         domains = domains.to(engine.state.device, non_blocking=False)
-        target = {'nodes': nodes, 'edges': edges, 'domains': domains}
+        target = {'nodes': nodes, 'edges': edges, 'domains': domains, 'seg': seg}
 
         self.network[0].train()
         self.network[1].eval()
@@ -45,7 +45,7 @@ class RelationformerTrainer(SupervisedTrainer):
         # ---- predictions for visualization ----
         pred_nodes, pred_edges = relation_infer(
             h.detach(), out, self.network[0],
-            80, 2,
+            80, 5,
             nms=False, map_=False
         )
         
@@ -53,28 +53,48 @@ class RelationformerTrainer(SupervisedTrainer):
         # only call if visualizer exists
         if hasattr(self, "viz"):
             self.viz.maybe_save(
-                images,           # <- positional, corresponds to image_bchw
-                nodes, edges,     # GT lists
-                pred_nodes, pred_edges,
-                epoch, iteration,
-                batch_index=0,
-                tag="train",
-            )        
+                images, nodes, edges, pred_nodes, pred_edges,
+                epoch, iteration, batch_index=0, tag="train",
+                gt_seg=seg,           # Ground truth from batchdata
+                pred_seg=out.get("pred_seg") # Model output logits
+            )  
 
         losses = self.loss_function(h, out, target, pred_backbone_domains, pred_instance_domains)
         
-        # loss_feat = 0
-        # for i in range(len(seg_srcs)):
-        #     loss_feat += F.l1_loss(srcs[i], seg_srcs[i].detach())
+        # -------------------------------------------------
+        # SEGMENTATION INFLUENCE (GRADIENT-BASED, SOURCE vs TARGET)
+        # -------------------------------------------------
+        pred_seg = out.get("pred_seg", None)
 
-        # losses.update({'feature':loss_feat})
-        # losses['total'] = losses['total']+loss_feat
-        # Clip the gradient
-        # clip_grad_norm_(
-        #     self.network.parameters(),
-        #     max_norm=GRADIENT_CLIP_L2_NORM,
-        #     norm_type=2,
-        # )
+        if pred_seg is not None:
+            grad = torch.autograd.grad(
+                losses["total"],
+                pred_seg,
+                retain_graph=True,
+                allow_unused=True
+            )[0]
+
+            if grad is not None:
+                # domains: [B]
+                keep = (domains == 0)
+
+                if keep.any():
+                    seg_influence_source = grad[keep].norm().detach()
+                else:
+                    seg_influence_source = torch.tensor(0.0, device=grad.device)
+
+                if (~keep).any():
+                    seg_influence_target = grad[~keep].norm().detach()
+                else:
+                    seg_influence_target = torch.tensor(0.0, device=grad.device)
+            else:
+                seg_influence_source = torch.tensor(0.0, device=engine.state.device)
+                seg_influence_target = torch.tensor(0.0, device=engine.state.device)
+        else:
+            seg_influence_source = torch.tensor(0.0, device=engine.state.device)
+            seg_influence_target = torch.tensor(0.0, device=engine.state.device)
+
+
         losses['total'].backward()
 
         # if 0.1 > 0:
@@ -92,7 +112,7 @@ class RelationformerTrainer(SupervisedTrainer):
         gc.collect()
         torch.cuda.empty_cache()
 
-        return {"src": srcs[-1], "loss": losses, "domains": domains}
+        return {"src": srcs[-1], "loss": losses, "domains": domains, "seg_influence_source": seg_influence_source, "seg_influence_target": seg_influence_target,}
 
 
 def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer,
@@ -132,7 +152,7 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
             save_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (config.log.exp_name, config.DATA.SEED),
                                   './models'),
             save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
-            save_interval=10,   # 5
+            save_interval=5,   # 5
             n_saved=2   # 5
         ),        
         TensorBoardStatsHandler(
@@ -185,13 +205,35 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
         ),
         TensorBoardStatsHandler(
             writer,
+            tag_name="seg_loss",
+            output_transform=lambda x: {"seg_loss": float(x["loss"]["seg"])},
+            global_epoch_transform=lambda _: scheduler.last_epoch,
+            epoch_log=1,
+            # iteration_log=False,
+        ),
+        TensorBoardStatsHandler(
+            writer,
             tag_name="total_loss",
             output_transform=lambda x: {"total_loss": float(x["loss"]["total"])},
             global_epoch_transform=lambda _: scheduler.last_epoch,
             epoch_log=1,
             # iteration_log=False,
         ),
+        TensorBoardStatsHandler(
+            writer,
+            tag_name="seg_influence/source",
+            output_transform=lambda x: float(x["seg_influence_source"]),
+            global_epoch_transform=lambda _: scheduler.last_epoch,
+            epoch_log=1,
+        ),
 
+        TensorBoardStatsHandler(
+            writer,
+            tag_name="seg_influence/target",
+            output_transform=lambda x: float(x["seg_influence_target"]),
+            global_epoch_transform=lambda _: scheduler.last_epoch,
+            epoch_log=1,
+        ),
     ]
     # train_post_transform = Compose(
     #     [AsDiscreted(keys=("pred", "label"),
@@ -243,7 +285,7 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
     )
 
     out_dir = os.path.join(
-        '/data/scavone/cross-dim_i2g_2d/visual di prova',
+        'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/visual_di_prova',
         "runs",
         f"{config.log.exp_name}_{config.DATA.SEED}",
         "debug_vis"

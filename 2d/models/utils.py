@@ -18,6 +18,8 @@ def nested_tensor_from_tensor_list(tensor_list):
         mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
         for img, pad_img, m in zip(tensor_list, padded_images, mask):
             pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+            # pad_img = pad_img.clone()
+            # pad_img[: img.shape[0], : img.shape[1], : img.shape[2]] = img
             m[: img.shape[1], :img.shape[2]] = False
     else:
         raise ValueError('not supported')
