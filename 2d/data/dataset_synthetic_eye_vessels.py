@@ -229,16 +229,35 @@ def build_synthetic_vessel_network_data(config, mode='train', split=0.8, max_sam
                 edges_files_val.append(str(graph_subdir / 'edges.csv'))
 
             data_dicts_val = [
-            {"img": img_file, "seg": seg_file, "nodes": node_file, "edges": edge_file} for
-            img_file, seg_file, node_file, edge_file in zip(img_files_val, lbl_files_val, nodes_files_val, edges_files_val)
-        ]
+                {"img": img_file, "seg": seg_file, "nodes": node_file, "edges": edge_file} for
+                img_file, seg_file, node_file, edge_file in zip(img_files_val, lbl_files_val, nodes_files_val, edges_files_val)
+            ]
 
             train_files = data_dicts_train
             val_files   = data_dicts_val
+
+            random.shuffle(train_files)
+            random.shuffle(val_files)
             
+            N_train_total = len(train_files)
+            N_val_total = len(val_files)
+
             if max_samples > 0:
-                train_files = train_files[:max_samples]
-                val_files = val_files[:round(max_samples * (1 - split))]
+                # ratio of how much of training you keep
+                r = min(1.0, max_samples / max(1, N_train_total))
+
+                # slice train
+                train_keep = min(max_samples, N_train_total)
+                train_files = train_files[:train_keep]
+
+                # slice val with the same retention ratio
+                val_keep = int(round(N_val_total * r))
+
+                # safety: ensure at least 1 val sample if you want validation to run
+                # (set to 0 if you explicitly want to allow "no validation")
+                val_keep = max(1, val_keep) if N_val_total > 0 else 0
+
+                val_files = val_files[:val_keep]
         
         else:
             random.seed(config.DATA.SEED)
@@ -250,6 +269,9 @@ def build_synthetic_vessel_network_data(config, mode='train', split=0.8, max_sam
             if max_samples > 0:
                 train_files = train_files[:max_samples]
                 val_files   = val_files[:round(max_samples * (1 - split))]
+
+        random.shuffle(train_files)
+        random.shuffle(val_files)
 
         train_ds = Vessel2GraphDataLoader(
             data=train_files,

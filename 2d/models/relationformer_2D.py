@@ -160,20 +160,7 @@ class RelationFormer(nn.Module):
 
         class_prob = self.class_embed(object_token)
         
-        # DEBUG START
-        # coord_loc = self.bbox_embed(object_token).sigmoid()         # !!!!!!!!!!!!!!!!! scommentare
-        pre = self.bbox_embed(object_token)          # BEFORE sigmoid
-        post = pre.sigmoid()                         # AFTER sigmoid
-        if random.random() < 0.02:  # ~10% chance
-            print("\npre min/max:", pre.min().item(), pre.max().item())
-            print("post min/max:", post.min().item(), post.max().item())
-            q = torch.quantile(pre.flatten(), torch.tensor([0.01,0.5,0.99], device=pre.device))
-            sat_lo = (post < 0.01).float().mean().item()
-            sat_hi = (post > 0.99).float().mean().item()
-            print(f"pre q1/med/q99=({q[0]:.2f},{q[1]:.2f},{q[2]:.2f}), "
-                f"post sat low={sat_lo:.2f}, high={sat_hi:.2f}")
-        coord_loc = post
-        #DEBUG END
+        coord_loc = self.bbox_embed(object_token).sigmoid()
 
         if self.config.DATA.MIXED:
             # Flatten the tensor but keep batch dimension

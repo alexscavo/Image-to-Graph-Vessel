@@ -372,9 +372,9 @@ def test(args):
 
 
 if __name__ == '__main__':
-    args = parser.parse_args(['--exp_name', 'test_finetuning_mix_synth_2',
-                              '--config', 'configs/test_mixed_synth.yaml',
-                              '--checkpoint', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_synth2_10/models/best_checkpoint_key_metric=2.5440.pt',
+    args = parser.parse_args(['--exp_name', 'test_finetuning_mix_synth_HNS',
+                              '--config', '2d/configs/test_mixed_synth.yaml',
+                              '--checkpoint', "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_synth_HNS_10/models/checkpoint_epoch=100.pt",
                               '--no_strict_loading',
-                              '--out_path', '/data/scavone/cross-dim_i2g_2d/test_results'])
+                              '--out_path', 'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/test_results'])
     test(args)

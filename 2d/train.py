@@ -14,13 +14,13 @@ from data.dataset_road_network import build_road_network_data
 from data.dataset_synthetic_eye_vessels import build_synthetic_vessel_network_data
 from data.dataset_real_eye_vessels import build_real_vessel_network_data
 from training.evaluator import build_evaluator
-from training.trainer import build_trainer
+from training.trainer_with_ema import build_trainer
 from models import build_model
 from models.EMA_model import EMA_Model
 from utils.utils import image_graph_collate_road_network
 from torch.utils.tensorboard import SummaryWriter
 from models.matcher import build_matcher
-from training.losses import EDGE_SAMPLING_MODE, SetCriterion
+from training.losses_with_ema import EDGE_SAMPLING_MODE, SetCriterion
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
 from PIL import Image
 
@@ -36,30 +36,6 @@ if not hasattr(Image, "ANTIALIAS"):
     except Exception:
         pass
 
-parser = ArgumentParser()
-parser.add_argument('--config',
-                    default=None,
-                    help='config file (.yml) containing the hyper-parameters for training. '
-                         'If None, use the nnU-Net config. See /config for examples.')
-parser.add_argument('--resume', default=None,
-                    help='checkpoint of the last epoch of the model')
-parser.add_argument('--restore_state', dest='restore_state', help='whether the state should be restored', action='store_true')
-parser.add_argument('--seg_net', default=None,
-                    help='checkpoint of the segmentation model')
-parser.add_argument('--device', default='cuda',
-                    help='device to use for training')
-parser.add_argument('--cuda_visible_device', nargs='*', type=int, default=None,
-                    help='list of index where skip conn will be made')
-parser.add_argument('--recover_optim', default=False, action="store_true",
-                    help="Whether to restore optimizer's state. Only necessary when resuming training.")
-parser.add_argument('--exp_name', dest='exp_name', help='name of the experiment', type=str,required=True)
-parser.add_argument('--pretrain_seg', default=False, action="store_true",
-                    help="Whether to pretrain on segs instead of raw images")
-parser.add_argument('--no_strict_loading', default=False, action="store_true",
-                    help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
-parser.add_argument('--sspt', default=False, action="store_true",
-                    help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
-parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
 
 
 class obj:
@@ -354,6 +330,31 @@ def match_name_keywords(n, name_keywords):
 
 if __name__ == '__main__':
 
+    parser = ArgumentParser()
+    parser.add_argument('--config',
+                        default=None,
+                        help='config file (.yml) containing the hyper-parameters for training. '
+                            'If None, use the nnU-Net config. See /config for examples.')
+    parser.add_argument('--resume', default=None,
+                        help='checkpoint of the last epoch of the model')
+    parser.add_argument('--restore_state', dest='restore_state', help='whether the state should be restored', action='store_true')
+    parser.add_argument('--seg_net', default=None,
+                        help='checkpoint of the segmentation model')
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training')
+    parser.add_argument('--cuda_visible_device', nargs='*', type=int, default=None,
+                        help='list of index where skip conn will be made')
+    parser.add_argument('--recover_optim', default=False, action="store_true",
+                        help="Whether to restore optimizer's state. Only necessary when resuming training.")
+    parser.add_argument('--exp_name', dest='exp_name', help='name of the experiment', type=str,required=True)
+    parser.add_argument('--pretrain_seg', default=False, action="store_true",
+                        help="Whether to pretrain on segs instead of raw images")
+    parser.add_argument('--no_strict_loading', default=False, action="store_true",
+                        help="Whether the model was pretrained with domain adversarial. If true, the checkpoint will be loaded with strict=false")
+    parser.add_argument('--sspt', default=False, action="store_true",
+                        help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
+    parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
+
     ########################################
     # PRIMA DI ESEGUIRE, VERIFICARE IL NUMERO DI RLN_TOKEN SIA NEL FILE DI CONFIGURAZIONE
     # CHE NEL FILE TRAINER A RIGA 48
@@ -368,17 +369,18 @@ if __name__ == '__main__':
     
     
     # --- PRE-TRAINING --- 
-    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth1',
-    #                           '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_synth.yaml',
-    #                          ])
+    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth_HNS',
+                            #   '--config', '2d\configs\pretrained_config_2d_synth_HNS.yaml',
+                            #   '--display_prob', '0.001'
+                            #  ])
     
     
     # --- FINE TUNING ---
-    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_short',
-    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
-    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
-    #                         '--no_strict_loading'
-    #                         ])
+    args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_HNS',
+                            '--config', '2d\configs\config_2d_synth_HNS.yaml',
+                            '--resume', 'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth_HNS_10/models/checkpoint_epoch=50.pt',
+                            '--no_strict_loading'
+                            ])
     
     ########################################
     #############  OCTA 500 ################
@@ -391,11 +393,11 @@ if __name__ == '__main__':
     
     
     # --- FINE TUNING ---
-    args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
-                            '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
-                            '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
-                            '--no_strict_loading'
-                            ])
+    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
+    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
+    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+    #                         '--no_strict_loading'
+    #                         ])
 
     import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy('file_system')

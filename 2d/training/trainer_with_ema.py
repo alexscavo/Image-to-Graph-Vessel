@@ -76,8 +76,8 @@ class RelationformerTrainer(SupervisedTrainer):
             self.viz.maybe_save(
                 images, nodes, edges, pred_nodes, pred_edges,
                 epoch, iteration, batch_index=0, tag="train",
-                gt_seg=seg,           # Ground truth from batchdata
-                pred_seg=out.get("pred_seg") # Model output logits
+                # gt_seg=seg,           # Ground truth from batchdata
+                # pred_seg=out.get("pred_seg") # Model output logits
             )  
 
         losses = self.loss_function(h, out, target, pred_backbone_domains, pred_instance_domains)
@@ -161,7 +161,13 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
         [type]: [description]
     """
 
-    save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler, "ema_relation": ema_relation.ema if ema_relation is not None else None},
+    save_dict = {
+        "net": net,
+        "optimizer": optimizer,
+        "scheduler": scheduler,
+    }
+    if ema_relation is not None:
+        save_dict["ema_relation"] = ema_relation.ema
 
     train_handlers = [
         LrScheduleHandler(
@@ -234,14 +240,14 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
             epoch_log=1,
             # iteration_log=False,
         ),
-        TensorBoardStatsHandler(
-            writer,
-            tag_name="seg_loss",
-            output_transform=lambda x: {"seg_loss": float(x["loss"]["seg"])},
-            global_epoch_transform=lambda _: scheduler.last_epoch,
-            epoch_log=1,
-            # iteration_log=False,
-        ),
+        # TensorBoardStatsHandler(
+        #     writer,
+        #     tag_name="seg_loss",
+        #     output_transform=lambda x: {"seg_loss": float(x["loss"]["seg"])},
+        #     global_epoch_transform=lambda _: scheduler.last_epoch,
+        #     epoch_log=1,
+        #     # iteration_log=False,
+        # ),
         TensorBoardStatsHandler(
             writer,
             tag_name="total_loss",
