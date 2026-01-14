@@ -530,7 +530,7 @@ if __name__ == "__main__":
         '--max_samples_val', '1000',
         '--eval',
         # '--no_strict_loading',
-        '--display_prob', '0.0',
+        '--display_prob', '0.02',
         '--bn_calibrate',
         # '--mixed'
         # '--show_debug',

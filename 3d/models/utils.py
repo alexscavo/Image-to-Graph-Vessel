@@ -5,23 +5,54 @@ import torch.distributed as dist
 
 
 def nested_tensor_from_tensor_list(tensor_list):
-    # TODO make this more general
-    if tensor_list[0].ndim == 3:
-        # TODO make it support different-sized images
+    # Supports:
+    #  - 2D: [C, H, W]  -> batch [B, C, H, W], mask [B, H, W]
+    #  - 3D: [C, D, H, W] -> batch [B, C, D, H, W], mask [B, D, H, W]
+
+    if len(tensor_list) == 0:
+        raise ValueError("empty tensor_list")
+
+    ndim = tensor_list[0].ndim
+
+    if ndim == 3:
+        # [C, H, W]
         max_size = _max_by_axis([list(img.shape) for img in tensor_list])
-        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
         batch_shape = [len(tensor_list)] + max_size
         b, c, h, w = batch_shape
+
         dtype = tensor_list[0].dtype
         device = tensor_list[0].device
-        padded_images = torch.zeros(batch_shape, dtype=dtype, device=device)
+
+        padded = torch.zeros(batch_shape, dtype=dtype, device=device)
         mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
-        for img, pad_img, m in zip(tensor_list, padded_images, mask):
+
+        for img, pad_img, m in zip(tensor_list, padded, mask):
             pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
-            m[: img.shape[1], :img.shape[2]] = False
+            m[: img.shape[1], : img.shape[2]] = False
+
+        return NestedTensor(padded, mask)
+
+    elif ndim == 4:
+        # [C, D, H, W]
+        max_size = _max_by_axis([list(vol.shape) for vol in tensor_list])
+        batch_shape = [len(tensor_list)] + max_size
+        b, c, d, h, w = batch_shape
+
+        dtype = tensor_list[0].dtype
+        device = tensor_list[0].device
+
+        padded = torch.zeros(batch_shape, dtype=dtype, device=device)
+        mask = torch.ones((b, d, h, w), dtype=torch.bool, device=device)
+
+        for vol, pad_vol, m in zip(tensor_list, padded, mask):
+            pad_vol[: vol.shape[0], : vol.shape[1], : vol.shape[2], : vol.shape[3]].copy_(vol)
+            m[: vol.shape[1], : vol.shape[2], : vol.shape[3]] = False
+
+        return NestedTensor(padded, mask)
+
     else:
-        raise ValueError('not supported')
-    return NestedTensor(padded_images, mask)
+        raise ValueError(f"not supported ndim={ndim}")
+
 
 def _max_by_axis(the_list):
     maxes = the_list[0]

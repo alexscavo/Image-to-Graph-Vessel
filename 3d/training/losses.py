@@ -89,12 +89,14 @@ class SetCriterion(nn.Module):
                             'nodes':config.TRAIN.W_NODE,
                             'edges':config.TRAIN.W_EDGE,
                             "domain": config.TRAIN.W_DOMAIN,
+                            "seg": config.TRAIN.W_SEG
                             }
         self.dims = dims
         self.num_edge_samples = num_edge_samples
         self.edge_sampling_mode = edge_sampling_mode
         self.sample_ratio = config.TRAIN.EDGE_SAMPLE_RATIO
         self.sample_ratio_interval = config.TRAIN.EDGE_SAMPLE_RATIO_INTERVAL
+        self.exclude_target_seg = getattr(config.TRAIN, "EXCLUDE_TARGET_SEG", True)
         if config.DATA.MIXED:
             self.domain_img_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.IMAGE_ADVERSARIAL else None
             self.domain_inst_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.GRAPH_ADVERSARIAL else None
@@ -104,7 +106,44 @@ class SetCriterion(nn.Module):
             self.domain_img_loss = None
             self.domain_inst_loss = None
             self.consistency_loss = None
+        
 
+    def loss_seg(self, pred_seg, target_seg, eps=1e-6):
+        """
+        pred_seg: [B, Cseg, H, W] (logits)
+        target_seg:
+        - binary: [B, 1, H, W] or [B, H, W] with {0,1}
+        - multiclass: [B, H, W] with {0..Cseg-1}
+        """
+        if pred_seg is None or pred_seg.numel() == 0:
+            return torch.tensor(0.0, device=target_seg.device)
+
+        target_seg = target_seg.to(pred_seg.device)
+
+        # binary case (Cseg == 1): BCEWithLogits
+        if pred_seg.shape[1] == 1:
+            if target_seg.dim() == 3:
+                target_seg = target_seg.unsqueeze(1)
+            target_seg = target_seg.float()
+
+            # compute pos_weight per batch
+            pos = target_seg.sum()
+            neg = target_seg.numel() - pos
+            pos_weight = (neg / (pos + eps)).clamp(1.0, 50.0)  # clamp to avoid crazy weights
+
+            return F.binary_cross_entropy_with_logits(
+                pred_seg, target_seg,
+                pos_weight=pos_weight
+            )
+
+        # multiclass case (Cseg > 1): CrossEntropy
+        else:
+            # target must be [B,H,W] long
+            if target_seg.dim() == 4 and target_seg.shape[1] == 1:
+                target_seg = target_seg[:, 0, ...]
+            target_seg = target_seg.long()
+            return F.cross_entropy(pred_seg, target_seg)
+        
 
     def loss_class(self, outputs, indices):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
@@ -353,59 +392,116 @@ class SetCriterion(nn.Module):
 
         return domain_loss
 
-
     def forward(self, h, out, target, pred_backbone_domains, pred_instance_domains):
-        """ This performs the loss computation.
-        Parameters:
-             outputs: dict of tensors, see the output specification of the model for the format
-             targets: list of dicts, such that len(targets) == batch_size.
-                      The expected keys in each dict depends on the losses applied, see each loss' doc
-        """
-
-        # Retrieve the matching between the outputs of the last layer and the targets
+        # -------------------------------------------------
+        # MATCHING + STANDARD LOSSES (unchanged)
+        # -------------------------------------------------
+        device = h.device if hasattr(h, "device") else h.get_device()
+        
         indices = self.matcher(out, target)
-        
-        # DEBUG START
-        if debug_check:
-            for b, (src_idx, tgt_idx) in enumerate(indices):
-                n_matched = len(src_idx)
-                n_gt = target['nodes'][b].shape[0]
-                n_pred_total = out['pred_logits'].shape[1]
-                
-                if n_matched == 0:
-                    print(f"⚠️  Batch {b}: ZERO MATCHES! GT has {n_gt} nodes")
-                elif n_matched < n_gt * 0.5:
-                    print(f"⚠️  Batch {b}: Low match rate: {n_matched}/{n_gt} ({100*n_matched/n_gt:.1f}%)")
-                
-                # Check predicted class distribution
-                pred_classes = torch.argmax(out['pred_logits'][b], -1)
-                n_pred_obj = (pred_classes == 1).sum().item()
-                print(f"   Batch {b}: {n_pred_obj}/{n_pred_total} queries classified as objects")
-            
-            print("\n[MATCHER] batch stats")
-            total_pos = 0
-            if random.random() < 0.01:
-                print(f"\n[4. INFERENCE RESULTS]")
-                N = 1  # number of samples you want to inspect
-                for i in range(min(N, len(indices))):
-                    print(f"  sample {b}: matched {len(src_idx)} preds to {len(tgt_idx)} GT nodes")
-                    total_pos += len(src_idx)
-            print(f"  total matched preds in batch: {total_pos}")
-            
-        # DEBUG END
-        
+
         losses = {}
         losses['class'] = self.loss_class(out['pred_logits'], indices)
-        losses['nodes'] = self.loss_nodes(out['pred_nodes'][...,:self.dims], target['nodes'], indices)
+        losses['nodes'] = self.loss_nodes(out['pred_nodes'][..., :self.dims], target['nodes'], indices)
         losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
         losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
         losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
+
         if self.domain_img_loss or self.domain_inst_loss:
-            losses['domain'] = self.loss_domains(pred_backbone_domains, target['interpolated_domains'], pred_instance_domains, target['domains'])
+            losses['domain'] = self.loss_domains(
+                pred_backbone_domains,
+                target['interpolated_domains'],
+                pred_instance_domains,
+                target['domains']
+            )
         else:
             losses['domain'] = 0
 
+        # -------------------------------------------------
+        # SEGMENTATION LOSS (SOURCE ONLY: domain == 0)
+        # -------------------------------------------------
+        pred_seg = out.get('pred_seg', None)
+        gt_seg   = target.get('seg', None)
+
+        if pred_seg is None or gt_seg is None:
+            losses['seg'] = torch.tensor(0.0, device=device)
+        else:
+            # keep: True for source samples only
+            keep = (target['domains'] == 0)
+
+            # If domains might be a list, convert once
+            if not torch.is_tensor(keep):
+                keep = torch.tensor(keep, device=pred_seg.device, dtype=torch.bool)
+
+            # Ensure mask is on correct device
+            keep = keep.to(device=pred_seg.device)
+
+            if keep.any():
+                losses['seg'] = self.loss_seg(pred_seg[keep], gt_seg[keep])
+            else:
+                losses['seg'] = pred_seg.new_tensor(0.0)
+
+        # -------------------------------------------------
+        # TOTAL
+        # -------------------------------------------------
+        losses['total'] = sum(losses[k] * self.weight_dict[k] for k in self.losses)
+
+        return losses
+
+
+    # def forward(self, h, out, target, pred_backbone_domains, pred_instance_domains):
+    #     """ This performs the loss computation.
+    #     Segmentation loss is applied ONLY on source-domain samples (domain == 0).
+    #     Parameters:
+    #          outputs: dict of tensors, see the output specification of the model for the format
+    #          targets: list of dicts, such that len(targets) == batch_size.
+    #                   The expected keys in each dict depends on the losses applied, see each loss' doc
+    #     """
+
+    #     # Retrieve the matching between the outputs of the last layer and the targets
+    #     indices = self.matcher(out, target)
         
-        losses['total'] = sum([losses[key]*self.weight_dict[key] for key in self.losses])
+    #     # DEBUG START
+    #     if debug_check:
+    #         for b, (src_idx, tgt_idx) in enumerate(indices):
+    #             n_matched = len(src_idx)
+    #             n_gt = target['nodes'][b].shape[0]
+    #             n_pred_total = out['pred_logits'].shape[1]
+                
+    #             if n_matched == 0:
+    #                 print(f"⚠️  Batch {b}: ZERO MATCHES! GT has {n_gt} nodes")
+    #             elif n_matched < n_gt * 0.5:
+    #                 print(f"⚠️  Batch {b}: Low match rate: {n_matched}/{n_gt} ({100*n_matched/n_gt:.1f}%)")
+                
+    #             # Check predicted class distribution
+    #             pred_classes = torch.argmax(out['pred_logits'][b], -1)
+    #             n_pred_obj = (pred_classes == 1).sum().item()
+    #             print(f"   Batch {b}: {n_pred_obj}/{n_pred_total} queries classified as objects")
+            
+    #         print("\n[MATCHER] batch stats")
+    #         total_pos = 0
+    #         if random.random() < 0.01:
+    #             print(f"\n[4. INFERENCE RESULTS]")
+    #             N = 1  # number of samples you want to inspect
+    #             for i in range(min(N, len(indices))):
+    #                 print(f"  sample {b}: matched {len(src_idx)} preds to {len(tgt_idx)} GT nodes")
+    #                 total_pos += len(src_idx)
+    #         print(f"  total matched preds in batch: {total_pos}")
+            
+    #     # DEBUG END
+        
+    #     losses = {}
+    #     losses['class'] = self.loss_class(out['pred_logits'], indices)
+    #     losses['nodes'] = self.loss_nodes(out['pred_nodes'][...,:self.dims], target['nodes'], indices)
+    #     losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
+    #     losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
+    #     losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
+    #     if self.domain_img_loss or self.domain_inst_loss:
+    #         losses['domain'] = self.loss_domains(pred_backbone_domains, target['interpolated_domains'], pred_instance_domains, target['domains'])
+    #     else:
+    #         losses['domain'] = 0
+
+        
+    #     losses['total'] = sum([losses[key]*self.weight_dict[key] for key in self.losses])
 
         return losses

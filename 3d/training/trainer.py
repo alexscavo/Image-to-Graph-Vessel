@@ -105,7 +105,7 @@ class RelationformerTrainer(SupervisedTrainer):
         nodes = [node.to(engine.state.device,  non_blocking=False) for node in nodes]
         edges = [edge.to(engine.state.device,  non_blocking=False) for edge in edges]
         domains = domains.to(engine.state.device, non_blocking=False)
-        target = {"nodes": nodes, "edges": edges, "domains": domains}
+        target = {"nodes": nodes, "edges": edges, "domains": domains, "segs":segs}
 
         self.network.train()
         self.optimizer.zero_grad()
@@ -208,7 +208,7 @@ class RelationformerTrainer(SupervisedTrainer):
         if self.seg:
             h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(segs.type(torch.FloatTensor).to(engine.state.device), z_pos, alpha, domain_labels=domains)
         else:
-            h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images.type(torch.FloatTensor).to(engine.state.device), z_pos, alpha, domain_labels=domains)
+            h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images.type(torch.FloatTensor).to(engine.state.device), z_pos, alpha, domain_labels=domains, seg=True)
 
         # ============= DIAGNOSTIC BLOCK START =============
         # 2. Check raw model outputs
@@ -352,6 +352,39 @@ class RelationformerTrainer(SupervisedTrainer):
         # print(f"{'='*70}\n")
         # ============= DIAGNOSTIC BLOCK END =============
         
+        # -------------------------------------------------
+        # SEGMENTATION INFLUENCE (GRADIENT-BASED, SOURCE vs TARGET)
+        # -------------------------------------------------
+        pred_seg = out.get("pred_seg", None)
+
+        if pred_seg is not None:
+            grad = torch.autograd.grad(
+                losses["total"],
+                pred_seg,
+                retain_graph=True,
+                allow_unused=True
+            )[0]
+
+            if grad is not None:
+                # domains: [B]
+                keep = (domains == 0)
+
+                if keep.any():
+                    seg_influence_source = grad[keep].norm().detach()
+                else:
+                    seg_influence_source = torch.tensor(0.0, device=grad.device)
+
+                if (~keep).any():
+                    seg_influence_target = grad[~keep].norm().detach()
+                else:
+                    seg_influence_target = torch.tensor(0.0, device=grad.device)
+            else:
+                seg_influence_source = torch.tensor(0.0, device=engine.state.device)
+                seg_influence_target = torch.tensor(0.0, device=engine.state.device)
+        else:
+            seg_influence_source = torch.tensor(0.0, device=engine.state.device)
+            seg_influence_target = torch.tensor(0.0, device=engine.state.device)
+        
 
         losses['total'].backward()        
         self.optimizer.step()
@@ -365,7 +398,7 @@ class RelationformerTrainer(SupervisedTrainer):
         gc.collect()
         # torch.cuda.empty_cache()
 
-        return {"src": srcs, "loss": losses, "domains": domains}
+        return {"src": srcs, "loss": losses, "domains": domains, "seg_influence_source": seg_influence_source, "seg_influence_target": seg_influence_target,}
 
 
 def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
@@ -421,6 +454,14 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
             output_transform=lambda x: x["loss"]["nodes"],
             global_epoch_transform=lambda x: scheduler.last_epoch,
             epoch_log=1,
+        ),
+        TensorBoardStatsHandler(
+            writer,
+            tag_name="seg_loss",
+            output_transform=lambda x: {"seg_loss": float(x["loss"]["seg"])},
+            global_epoch_transform=lambda _: scheduler.last_epoch,
+            epoch_log=1,
+            # iteration_log=False,
         ),
         TensorBoardStatsHandler(
             writer,
@@ -513,7 +554,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
     )
 
     out_dir = os.path.join(
-        '/data/scavone/cross-dim_i2g_3d/visual di prova',
+        config.vis_path,
         "runs",
         f"{config.log.exp_name}_{config.DATA.SEED}",
         "debug_vis"

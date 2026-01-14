@@ -56,6 +56,7 @@ def main(rank=0, args=None):
     config = dict2obj(config)
     config.log.exp_name = args.exp_name
     config.display_prob = args.display_prob
+    config.vis_path = args.vis_path
 
     exp_path = os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (args.exp_name, config.DATA.SEED))
     if os.path.exists(exp_path) and args.resume == None:
@@ -371,6 +372,7 @@ if __name__ == '__main__':
     parser.add_argument('--sspt', default=False, action="store_true",
                         help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
     parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
+    parser.add_argument('--vis_path', type=str, default='./vis_debug', help="Path where to save the visualization images")
 
 
 
@@ -380,9 +382,18 @@ if __name__ == '__main__':
 
     # --- PRE-TRAINING ---
     
+    # args = parser.parse_args([
+    #     '--exp_name', 'prova_strade_mie_con_seg_loss',
+    #     '--config', '3d/configs/roads_only_with_seg_loss.yaml',
+    #     '--continuous',
+    #     '--display_prob', '0.001',
+    # ])
+    
     args = parser.parse_args([
-        '--exp_name', 'prova_strade_mie',
-        '--config', '3d/configs/roads_only.yaml',
+        '--exp_name', 'prova_strade_mie_con_seg_loss',
+        '--config', '3d/configs/roads_only_with_seg_loss.yaml',
+        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_mie_con_seg_loss_20/models/checkpoint_epoch=15.pt',
+        '--restore_state',
         '--continuous',
         '--display_prob', '0.001',
     ])
@@ -402,15 +413,15 @@ if __name__ == '__main__':
     
     # --- FINETUNING ---
     
-    args = parser.parse_args([
-        '--exp_name', 'prova_strade',
-        '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only.yaml',
-        '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=50.pt',
-        '--restore_state',
-        # '--no_strict_loading',
-        '--continuous',
-        '--display_prob', '0.002',
-    ])
+    # args = parser.parse_args([
+    #     '--exp_name', 'prova_strade_seg_loss',
+    #     '--config', '/home/scavone/cross-dim_i2g/3d/configs/roads_only_with_seg_loss.yaml',
+    #     '--resume', '/data/scavone/cross-dim_i2g_3d/runs/prova_strade_20/models/checkpoint_epoch=50.pt',
+    #     '--restore_state',
+    #     # '--no_strict_loading',
+    #     '--continuous',
+    #     '--display_prob', '0.002',
+    # ])
     
 
     if args.parallel:

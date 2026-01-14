@@ -76,7 +76,7 @@ class Sat2GraphDataLoader(Dataset):
         """
         return len(self.data)
     
-    def _project_image_3d(self, sliced_data, z_pos):
+    '''def _project_image_3d(self, sliced_data, z_pos):
         """
         Project a 2D slice into a 3D space.
 
@@ -102,7 +102,39 @@ class Sat2GraphDataLoader(Dataset):
         for dz in (-2, -1, 0, 1, 2):
             projected_data[:, :, :, z + dz] = sliced_data
 
-        return projected_data
+        return projected_data'''
+        
+    def _project_image_3d(self, sliced_data, z_pos):
+        """
+        sliced_data: (C,H,W) in [-0.5, 0.5]
+        returns:     (C,H,W,D) in [-0.5, 0.5], background = -0.5
+        """
+        C, H, W = sliced_data.shape
+        D = W  # keep your original convention
+
+        projected = torch.full(
+            (C, H, W, D),
+            -0.5,
+            dtype=sliced_data.dtype,
+            device=sliced_data.device,
+        )
+
+        # choose z index
+        z = int(round(z_pos * (D - 1)))
+        z = max(2, min(D - 3, z))
+
+        # smooth slab weights (Gaussian-ish)
+        dzs     = [-2, -1,  0,  1,  2]
+        weights = [0.1, 0.3, 1.0, 0.3, 0.1]
+
+        # write weighted slice
+        for dz, w in zip(dzs, weights):
+            zz = z + dz
+            # blend: keep background at -0.5, move toward sliced_data by weight
+            # this keeps range bounded and avoids strange accumulation
+            projected[:, :, :, zz] = (-0.5) + (sliced_data + 0.5) * w
+
+        return projected
 
 
     def __getitem__(self, idx):
@@ -136,12 +168,16 @@ class Sat2GraphDataLoader(Dataset):
         z_pos = None
 
         if self.gaussian_augment:
-            # Choose z (normalized) for 3D embedding
             z_pos = random.randint(3, seg_data.shape[-1] - 4) / (seg_data.shape[-1] - 1) if not self.rotate else 0.5
 
-            # Project to 3D. NOTE:
-            # - seg_data is already centered {-0.5,+0.5}
-            # - img_data is still [0,1]; _project_image_3d() will center it internally
+            # --- apply photometric aug on the 2D image, BEFORE projection ---
+            # img_data is currently [0,1]
+            img_data = self.gaussian_noise(img_data)  # noise on 2D slice (good)
+
+            # center to [-0.5,0.5] BEFORE projection (required by _project_image_3d docstring)
+            img_data = (img_data - 0.5).clamp(-0.5, 0.5)
+
+            # seg_data is already in {-0.5,+0.5}
             seg_data = self._project_image_3d(seg_data, z_pos)
             img_data = self._project_image_3d(img_data, z_pos)
 
@@ -149,6 +185,7 @@ class Sat2GraphDataLoader(Dataset):
             coordinates = F.pad(coordinates, (0, 1), "constant", z_pos)
 
             if self.rotate:
+                # choose angles...
                 if self.continuous:
                     alpha = random.randint(0, 270)
                     beta  = random.randint(0, 270)
@@ -162,21 +199,23 @@ class Sat2GraphDataLoader(Dataset):
                 img_data = rotate_image(img_data, alpha, beta, gamma)
                 coordinates = rotate_coordinates(coordinates, alpha, beta, gamma)
 
-                # Re-binarize seg after interpolation artifacts from rotation
-                seg_data = torch.where(seg_data >= 0, torch.tensor(0.5, device=seg_data.device), torch.tensor(-0.5, device=seg_data.device))
+                # re-binarize seg to {-0.5,+0.5}
+                seg_data = torch.where(
+                    seg_data >= 0,
+                    torch.tensor(0.5, device=seg_data.device),
+                    torch.tensor(-0.5, device=seg_data.device)
+                )
 
-            # Photometric aug on img only (safe). Keep it mild while debugging.
-            img_data = self.gaussian_noise(img_data)
-
-            # IMPORTANT:
-            # Do NOT apply self.scaling here if it expects input in [0,1].
-            # After _project_image_3d(), img_data is typically in [-0.5, 0.5].
-            # So: either skip scaling, or set self.scaling to an identity mapping for [-0.5,0.5].
-            # img_data = self.scaling(img_data)  # <-- keep OFF unless it's identity in [-0.5,0.5]
+                # keep img bounded after interpolation
+                img_data = img_data.clamp(-0.5, 0.5)
 
             # Pad 3D volumes with background = -0.5
             img_data = self.pad_transform(img_data)
             seg_data = self.pad_transform(seg_data)
+
+            # final safety clamp (optional but recommended)
+            img_data = img_data.clamp(-0.5, 0.5)
+
 
         else:
             # 2D path (if you ever use it)

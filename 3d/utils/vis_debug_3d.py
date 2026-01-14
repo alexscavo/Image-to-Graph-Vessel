@@ -365,7 +365,7 @@ class DebugVisualizer3D:
             max_per_epoch=8,
             show_seg=True,
         )
-        trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: self.viz3d.start_epoch())
+        trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: self.viz3d.start_epoch())```
 
         ...
 
@@ -423,6 +423,7 @@ class DebugVisualizer3D:
         step,
         batch_index=0,
         tag="train",
+        pred_seg=None,
     ):
         """
         segs:  torch.Tensor or np.ndarray with shape (B, C, D, H, W) or (B, D, H, W).

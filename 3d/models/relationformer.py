@@ -13,7 +13,8 @@ from .deformable_detr_backbone import build_backbone
 from .deformable_transformer_3D import build_def_detr_transformer
 from .seresnet import build_seresnet
 from .position_encoding import PositionEmbeddingSine3D
-from .utils import nested_tensor_from_tensor_list
+from .utils import nested_tensor_from_tensor_list, NestedTensor
+from .segmentation_head import SegHead3D
 
 
 class RelationFormer(nn.Module):
@@ -45,6 +46,7 @@ class RelationFormer(nn.Module):
         self.position_embedding = PositionEmbeddingSine3D(channels=config.MODEL.DECODER.HIDDEN_DIM)
         self.query_embed = nn.Embedding(self.num_queries, self.hidden_dim)
         self.config = config
+        self.segmentation_head = None
         
         self.input_proj = nn.Conv3d(encoder.num_features, config.MODEL.DECODER.HIDDEN_DIM, kernel_size=1)
         
@@ -69,6 +71,25 @@ class RelationFormer(nn.Module):
         if config.DATA.MIXED:
             self.backbone_domain_discriminator = Discriminator(in_size=self.hidden_dim)
             self.instance_domain_discriminator = Discriminator(in_size=self.hidden_dim*self.num_queries)
+            
+        print("-"*50)
+        print('Segmentation configs:')
+        print(f"  Enabled: {self.config.MODEL.SEGMENTATION.ENABLED}")
+        print(f"  In channels: {self.config.MODEL.SEGMENTATION.IN_CHANS}")
+        print(f"  Mid channels: {self.config.MODEL.SEGMENTATION.MID_CHANS}")
+        print(f"  Num classes: {self.config.MODEL.SEGMENTATION.NUM_CLASSES}")
+        print("-"*50)
+        
+        if self.config.MODEL.SEGMENTATION.ENABLED:
+            seg_cfg = self.config.MODEL.SEGMENTATION
+
+            self.segmentation_head = SegHead3D(
+                in_ch=seg_cfg.IN_CHANS,          # e.g. 512
+                mid_ch=seg_cfg.MID_CHANS,        # e.g. 64
+                out_ch=seg_cfg.NUM_CLASSES       # e.g. 1 or K
+            )
+        else:
+            self.segmentation_head = None
 
 
         # prior_prob = 0.01
@@ -77,32 +98,31 @@ class RelationFormer(nn.Module):
         # nn.init.constant_(self.coord_embed.layers[-1].weight.data, 0)
         # nn.init.constant_(self.coord_embed.layers[-1].bias.data, 0)
 
-    def forward(self, samples, z_pos=None, alpha=1, domain_labels=None):
-        """ The forward expects a NestedTensor, which consists of:
-               - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
-               - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+    def forward(self, samples, z_pos=None, alpha=1, domain_labels=None, seg=True):
 
-            It returns a dict with the following elements:
-               - "pred_logits": the classification logits (including no-object) for all queries.
-                                Shape= [batch_size x num_queries x (num_classes + 1)]
-               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
-                               (center_x, center_y, height, width). These values are normalized in [0, 1],
-                               relative to the size of each individual image (disregarding possible padding).
-                               See PostProcess for information on how to retrieve the unnormalized bounding box.
-               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
-                                dictionnaries containing the two above keys for each decoder layer.
-        """
-        
-        # swin transformer
-        # feat_list, mask_list, pos_list = self.encoder(samples, self.position_embedding, return_interm_layers=False)
+        # Always define pred_seg so it's available at the end
+        pred_seg = None
+
+        # If samples isn't a NestedTensor, build one (works whether samples is a list or a batched tensor)
+        if not isinstance(samples, NestedTensor):
+            # If samples is a 5D batch tensor [B,C,D,H,W], iterating yields [C,D,H,W] per item
+            samples = nested_tensor_from_tensor_list(list(samples))
+
+        # ----------------------------
+        # Encoder / feature extraction
+        # ----------------------------
         if self.pre2d:
-            samples = nested_tensor_from_tensor_list([tensor.expand(3, -1, -1).contiguous() for tensor in samples])
-            #The positional encoding can be ignored because we will use 3D encoding
-            features, _pos = self.encoder(samples)
+            # pre2d path expects 2D images; expand single-channel 2D to 3 channels
+            # NOTE: this only makes sense if each element is [1,H,W] (2D). If you have volumes, don't use pre2d.
+            samples2d = nested_tensor_from_tensor_list(
+                [tensor.expand(3, -1, -1).contiguous() for tensor in samples.tensors]  # iter over batch -> [C,H,W]
+            )
+
+            features, _pos = self.encoder(samples2d)
             src, mask = features[-1].decompose()
             srcs = self.input_proj_2d[-1](src)
 
-            # Padding
+            # Padding (your existing code)
             z_coords = round((srcs.shape[-1] - 1) * z_pos)
             padding_before = z_coords
             padding_after = srcs.shape[-1] - padding_before - 1
@@ -114,22 +134,53 @@ class RelationFormer(nn.Module):
 
             mask_list = [mask]
             pos_list = [self.position_embedding(mask_list[-1]).to(srcs.device)]
-            assert mask is not None
-        else:
-            feat_list = [self.encoder(samples)]
-            mask_list = [torch.zeros(feat_list[0][:, 0, ...].shape, dtype=torch.bool).to(feat_list[0].device)]
-            pos_list = [self.position_embedding(mask_list[-1]).to(feat_list[0].device)]
-            srcs = self.input_proj(feat_list[-1])
 
+        else:
+            # 3D SEResNet path: backbone expects a Tensor, not a NestedTensor
+            x = samples.tensors  # [B, C, D, H, W]
+
+            # IMPORTANT: SEResNet first conv expects C==1 (as your error showed)
+            # So DO NOT expand to 3 channels here.
+            feat = self.encoder(x)  # should output [B, C', D', H', W'] (Tensor)
+            srcs = self.input_proj(feat)
+
+            # If you have padding and want correct masking, you need to downsample samples.mask to feat resolution.
+            # For fixed-size volumes, an all-false mask is fine:
+            mask = torch.zeros(feat.shape[0], feat.shape[2], feat.shape[3], feat.shape[4],
+                            dtype=torch.bool, device=feat.device)
+
+            mask_list = [mask]
+            pos_list = [self.position_embedding(mask_list[-1]).to(feat.device)]
+
+        # ----------------------------
+        # Mixed-domain heads (domain + seg)
+        # ----------------------------
+        
+        # Segmentation head (only if present AND seg flag is True)
+            if seg and (self.segmentation_head is not None):
+                seg_level = self.config.MODEL.SEGMENTATION.FROM_LEVEL
+
+                # For 3D, out_size should be (D,H,W). For 2D, it’s (H,W).
+                if samples.tensors.dim() == 5:
+                    out_size = samples.tensors.shape[-3:]  # (D,H,W)
+                else:
+                    out_size = samples.tensors.shape[-2:]  # (H,W)
+ 
+                pred_seg = self.segmentation_head(srcs, out_size)
+                
         if self.config.DATA.MIXED:
             flat_srcs = torch.flatten(srcs.clone().permute(0, 2, 3, 4, 1), end_dim=3)
-            domain_labels = domain_labels.unsqueeze(1).repeat_interleave(srcs.shape[2] * srcs.shape[3] * srcs.shape[4], dim=1).flatten()
+            domain_labels = domain_labels.unsqueeze(1).repeat_interleave(
+                srcs.shape[2] * srcs.shape[3] * srcs.shape[4], dim=1
+            ).flatten()
             backbone_domain_classifications = self.backbone_domain_discriminator(flat_srcs, alpha)
-        else: 
-            backbone_domain_classifications = torch.tensor(-1)
+        else:
+            backbone_domain_classifications = torch.tensor(-1, device=srcs.device)
             domain_labels = None
 
-        
+        # ----------------------------
+        # Decoder + outputs
+        # ----------------------------
         query_embed = self.query_embed.weight
         h = self.decoder(srcs, mask_list[-1], query_embed, pos_list[-1])
         object_token = h[...,:self.obj_token,:]
@@ -161,7 +212,7 @@ class RelationFormer(nn.Module):
             instance_domain_classifications = torch.tensor(-1)
 
         
-        out = {'pred_logits': class_prob, 'pred_nodes': coord_loc}
+        out = {'pred_logits': class_prob, 'pred_nodes': coord_loc, 'pred_seg': pred_seg}
         return h, out, srcs, backbone_domain_classifications, instance_domain_classifications, domain_labels
 
 
