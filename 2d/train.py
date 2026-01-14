@@ -14,13 +14,13 @@ from data.dataset_road_network import build_road_network_data
 from data.dataset_synthetic_eye_vessels import build_synthetic_vessel_network_data
 from data.dataset_real_eye_vessels import build_real_vessel_network_data
 from training.evaluator import build_evaluator
-from training.trainer_with_ema import build_trainer
+from training.trainer import build_trainer
 from models import build_model
 from models.EMA_model import EMA_Model
 from utils.utils import image_graph_collate_road_network
 from torch.utils.tensorboard import SummaryWriter
 from models.matcher import build_matcher
-from training.losses_with_ema import EDGE_SAMPLING_MODE, SetCriterion
+from training.losses import EDGE_SAMPLING_MODE, SetCriterion
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
 from PIL import Image
 
@@ -369,16 +369,16 @@ if __name__ == '__main__':
     
     
     # --- PRE-TRAINING --- 
-    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth_HNS',
-                            #   '--config', '2d\configs\pretrained_config_2d_synth_HNS.yaml',
+    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth_seg_HNM',
+                            #   '--config', '2d\configs\pretrained_2d_synth_seg_HNM.yaml',
                             #   '--display_prob', '0.001'
                             #  ])
     
     
     # --- FINE TUNING ---
-    args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_HNS',
-                            '--config', '2d\configs\config_2d_synth_HNS.yaml',
-                            '--resume', 'C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth_HNS_10/models/checkpoint_epoch=50.pt',
+    args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_seg_HNS',
+                            '--config', '2d\configs\config_2d_synth_seg_HNS.yaml',
+                            '--resume', "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth_seg_HNM_10/models/checkpoint_epoch=50.pt",
                             '--no_strict_loading'
                             ])
     

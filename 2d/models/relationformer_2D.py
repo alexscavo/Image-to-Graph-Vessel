@@ -80,19 +80,28 @@ class RelationFormer(nn.Module):
             self.input_proj.requires_grad_(False)
 
         if config.DATA.MIXED:
+
             self.backbone_domain_discriminator = Discriminator(in_size=self.hidden_dim)
             self.instance_domain_discriminator = Discriminator(in_size=self.hidden_dim*self.num_queries)
             
-            if self.config.MODEL.SEGMENTATION.ENABLED:
-                seg_cfg = self.config.MODEL.SEGMENTATION
+        if self.config.MODEL.SEGMENTATION.ENABLED:
+            seg_cfg = self.config.MODEL.SEGMENTATION
 
-                self.segmentation_head = SegHead2D(
-                    in_ch=seg_cfg.IN_CHANS,          # e.g. 512
-                    mid_ch=seg_cfg.MID_CHANS,        # e.g. 64
-                    out_ch=seg_cfg.NUM_CLASSES       # e.g. 1 or K
-                )
-            else:
-                self.segmentation_head = None
+            self.segmentation_head = SegHead2D(
+                in_ch=seg_cfg.IN_CHANS,          # e.g. 512
+                mid_ch=seg_cfg.MID_CHANS,        # e.g. 64
+                out_ch=seg_cfg.NUM_CLASSES       # e.g. 1 or K
+            )
+        else:
+            self.segmentation_head = None
+
+        print("-"*50)
+        print('Segmentation configs:')
+        print(f"  Enabled: {self.config.MODEL.SEGMENTATION.ENABLED}")
+        print(f"  In channels: {self.config.MODEL.SEGMENTATION.IN_CHANS}")
+        print(f"  Mid channels: {self.config.MODEL.SEGMENTATION.MID_CHANS}")
+        print(f"  Num classes: {self.config.MODEL.SEGMENTATION.NUM_CLASSES}")
+        print("-"*50)
             
         self.decoder.decoder.bbox_embed = None
 
@@ -148,15 +157,15 @@ class RelationFormer(nn.Module):
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
+
+        # --- segmentation head ---
+        if self.segmentation_head is not None:
+            
+            seg_level = self.config.MODEL.SEGMENTATION.FROM_LEVEL
+            out_size = samples.tensors.shape[-2:]
+            pred_seg = self.segmentation_head(srcs[seg_level], out_size)
             
         if self.config.DATA.MIXED:
-            
-            # --- segmentation head ---
-            if self.segmentation_head is not None:
-                
-                seg_level = self.config.MODEL.SEGMENTATION.FROM_LEVEL
-                out_size = samples.tensors.shape[-2:]
-                pred_seg = self.segmentation_head(srcs[seg_level], out_size)
             
             domain_features = []
             replicated_domain_labels = []

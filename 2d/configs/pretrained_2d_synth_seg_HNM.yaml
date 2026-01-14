@@ -2,17 +2,18 @@ DATA:
   DIM: 2 # data dimension
   BATCH_SIZE: 32 #16
   TEST_BATCH_SIZE: 128 #16
-  DATA_PATH: ""   # octa-synth-packed
-  SOURCE_DATA_PATH: "/data/scavone/20cities/patches" # Path to dataset, could be overwritten by command line argument
-  NUM_SOURCE_SAMPLES: -1
-  NUM_TARGET_SAMPLES: 2000
-  TARGET_DATA_PATH: "/data/scavone/octa-synth-packed/patches"
+  DATA_PATH: ""   # octa-synth-packed_bigger_inverted
+  SOURCE_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/20cities/patches" # Path to dataset, could be overwritten by command line argument
+  NUM_SOURCE_SAMPLES: 99200  
+  NUM_TARGET_SAMPLES: 480  
+  TARGET_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches"
   COMPUTE_TARGET_GRAPH_LOSS: True
-  TEST_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches/test"
+  TEST_DATA_PATH: "C:/Users/Utente/Desktop/tesi/datasets/octa-synth/patches"
   DATASET: "mixed_synthetic_eye_vessel_dataset" # Dataset name
   IMG_SIZE: [128, 128] # Input image size
   NUM_WORKERS: 4 # Number of data loading threads
   SEED: 10 # random seed for reproducibility
+  TRAIN_WITH_LABELS: False
 
 MODEL:
   NUM_CLASSES: 2 # Number of classes, overwritten in data preparation
@@ -22,7 +23,7 @@ MODEL:
     NAME: deformable_transformer_backbone
     HIDDEN_DIM: 512 #128 #256 #768
     POSITION_EMBEDDING: sine
-    NUM_FEATURE_LEVELS: 3
+    NUM_FEATURE_LEVELS: 4
     BACKBONE: resnet101
     BACKBONE_INIT_WEIGHTS: ResNet101_Weights
     MASKS: False
@@ -52,7 +53,7 @@ MODEL:
     # RLN_TOKEN: True
 
     OBJ_TOKEN: 80
-    RLN_TOKEN: 5
+    RLN_TOKEN: 5  # 5 for pretraining with octa-synth
     DUMMY_TOKEN: 0
 
     RLN_ATTN: False # only do comb RLN_ATTN True + RLN_TOKEN 0 and reverse
@@ -62,7 +63,7 @@ MODEL:
     C_NODE: 5
 
   SEGMENTATION:
-    ENABLED: False
+    ENABLED: True
     NUM_CLASSES: 1          # 1 for binary logits; use K for multi-class
     IN_CHANS: 512           # must match encoder/decoder hidden dim
     MID_CHANS: 64           # lightweight head width
@@ -92,20 +93,38 @@ TRAIN:
   EDGE_SAMPLING_MODE: "up"     # valid: "none" | "up" | "down" | "random_up"
   DOMAIN_WEIGHTING: [0.05, 0.95]
   
+  USE_EMA: True                 # enable EMA logic in trainer
+  EMA_DECAY: 0.999              # decay for EMA updates
+  EMA_UPDATE_EVERY: 1           # update every N iterations (keep 1 if you want always)
+  EMA_WARMUP_ITERS: 4000           # optional: don't update EMA for first N iters
 
-  SAVE_PATH: "/data/scavone/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
+  # --- Hard Negative Mining Scheduling (HNM/HNS) ---
+  HARD_NEGATIVE_MINING: True     # master switch
+
+  HNM_HARD_FRACTION_START: 0.2   # hard-negative fraction at start of ramp
+  HNM_HARD_FRACTION_END: 0.6     # hard-negative fraction after ramp
+  HNM_RAMP_EPOCHS: 20            # ramp length (epochs)
+  HNM_WARMUP_EPOCHS: 4           # optional: keep hard fraction at 0 for first N epochs
+
+  HNM_POOL_MULT: 2               # candidate pool = pool_mult * take_neg (clipped to available)
+  HNM_MODE: "weighted"           # "top_k" | "top_p_uniform" | "weighted"
+  HNM_TOP_P: 0.3                 # used only if HNM_MODE="top_p_uniform"
+  HNM_TEMP: 0.7                  # used only if HNM_MODE="weighted" (softmax temp-ish)
+
+  SAVE_PATH: "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights" # save path for the checkpoint, log and val results
   VAL_INTERVAL: 10 # validation interval
   SAVE_VAL: False # save validation data
   RECOVER_OPTIMIZER_STATE: False
 
   # loss weight
-  LOSSES: ["boxes", "class", "cards", "nodes", "edges", "domain"]
+  LOSSES: ["boxes", "class", "cards", "nodes", "edges", "domain", "seg"]
   W_BBOX: 2.0
   W_CLASS: 3.0
   W_CARD: 1.0
   W_NODE: 5.0
   W_EDGE: 5.0
   W_DOMAIN: 1.0
+  W_SEG: 0.1
 
 log:
   exp_name: "exp"

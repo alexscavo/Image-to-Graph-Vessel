@@ -372,7 +372,7 @@ def test(args):
 
 
 if __name__ == '__main__':
-    args = parser.parse_args(['--exp_name', 'test_finetuning_mix_synth_HNS',
+    args = parser.parse_args(['--exp_name', 'test_finetuning_mixed_synth_HNS_prova',
                               '--config', '2d/configs/test_mixed_synth.yaml',
                               '--checkpoint', "C:/Users/Utente/Desktop/tesi/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_synth_HNS_10/models/checkpoint_epoch=100.pt",
                               '--no_strict_loading',
