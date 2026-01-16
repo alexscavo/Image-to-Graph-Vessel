@@ -3,6 +3,7 @@ from torch.utils.data import ConcatDataset, WeightedRandomSampler
 from data.dataset_real_eye_vessels import build_real_vessel_network_data
 from data.dataset_road_network import build_road_network_data
 from data.dataset_synthetic_eye_vessels import build_synthetic_vessel_network_data
+from data.dataset_plants import build_plants_network_data
 import math
 
 def build_mixed_data(config, mode='split', split=0.95, upsample_target_domain=True, max_samples=-1, use_grayscale=False, has_val=False):
@@ -19,15 +20,24 @@ def build_mixed_data(config, mode='split', split=0.95, upsample_target_domain=Tr
     
     print(f"---- split: {split}")
     config.DATA.DATA_PATH = config.DATA.SOURCE_DATA_PATH
-    source_train_data, source_val_data, _ = build_road_network_data(config, mode, split, config.DATA.NUM_SOURCE_SAMPLES, use_grayscale=config.DATA.TARGET_DATA_PATH != "mixed_road_dataset", domain_classification=0, has_val=has_val)
-
-    config.DATA.DATA_PATH = config.DATA.TARGET_DATA_PATH
-    if config.DATA.DATASET == "mixed_road_dataset":
+    
+    source_name = config.DATA.SOURCE_DATASET_NAME
+    target_name = config.DATA.TARGET_DATASET_NAME
+    
+    if source_name == "roads":
+        source_train_data, source_val_data, _ = build_road_network_data(config, mode, split, config.DATA.NUM_SOURCE_SAMPLES, use_grayscale=config.DATA.TARGET_DATA_PATH != "mixed_road_dataset", domain_classification=0, has_val=has_val)
+    elif source_name == "plants":
+        source_train_data, source_val_data, _ = build_plants_network_data(config, mode, split, config.DATA.NUM_SOURCE_SAMPLES, use_grayscale=config.DATA.TARGET_DATA_PATH != "mixed_road_dataset", domain_classification=0, has_val=has_val)
+    
+    
+    if target_name == "roads":
         target_train_data, target_val_data, _ = build_road_network_data(config, mode, split, config.DATA.NUM_TARGET_SAMPLES, use_grayscale, domain_classification=1, mixed=True, has_val=has_val)
-    elif config.DATA.DATASET == "mixed_synthetic_eye_vessel_dataset":
+    elif target_name == "octa-synth":
         target_train_data, target_val_data, _ = build_synthetic_vessel_network_data(config, mode, split, config.DATA.NUM_TARGET_SAMPLES, use_grayscale, domain_classification=1, mixed=True, has_val=has_val)
-    elif config.DATA.DATASET == "mixed_real_eye_vessel_dataset":
+    elif target_name == "octa-real":
         target_train_data, target_val_data, _ = build_real_vessel_network_data(config, mode, split, config.DATA.NUM_TARGET_SAMPLES, use_grayscale, domain_classification=1, mixed=True, has_val=has_val)
+    elif target_name == "plants":
+        target_train_data, target_val_data, _ = build_plants_network_data(config, mode, split, config.DATA.NUM_TARGET_SAMPLES, use_grayscale, domain_classification=1, mixed=True, has_val=has_val)
 
     # Calculate the number of samples in each dataset
     num_samples_A = len(source_train_data)

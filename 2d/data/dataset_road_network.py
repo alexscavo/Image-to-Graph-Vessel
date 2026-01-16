@@ -127,7 +127,7 @@ class Sat2GraphDataLoader(Dataset):
             nodes = torch.tensor(np.float32(np.asarray(vtk_data.points)), dtype=torch.float)[:, :2]
             lines = torch.tensor(np.asarray(vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)
         elif data["vtp"].endswith(".pickle"):
-            nodes_xy, edges_ix, _ = load_graph_pickle_generic(data["vtp"])  # <— your working function
+            nodes_xy, edges_ix, _ = load_graph_pickle_generic(data["vtp"])  
 
             # If your pickles store (y,x), swap once here:
             # nodes_xy = nodes_xy[:, [1, 0]]
@@ -172,115 +172,6 @@ class Sat2GraphDataLoader(Dataset):
         
         return image_data, seg_data - 0.5, nodes_norm, lines, self.domain_classification
 
-
-# def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use_grayscale=False, domain_classification=-1, mixed=False):
-#     """[summary]
-
-#     Args:
-#         data_dir (str, optional): [description]. Defaults to ''.
-#         mode (str, optional): [description]. Defaults to 'train'.
-#         split (float, optional): [description]. Defaults to 0.8.
-#         domain_classification (number, optional): -1 if no domain, 0 for source domain, 1 for target domain.
-#     Returns:
-#         [type]: [description]
-#     """
-#     if mode == 'train':
-        
-#         if mixed == False:
-#             img_folder = os.path.join(config.DATA.DATA_PATH, 'raw')
-#             seg_folder = os.path.join(config.DATA.DATA_PATH, 'seg')
-#             vtk_folder = os.path.join(config.DATA.DATA_PATH, 'vtp')
-#         else: 
-#             img_folder = os.path.join(config.DATA.TARGET_DATA_PATH, 'raw')
-#             seg_folder = os.path.join(config.DATA.TARGET_DATA_PATH, 'seg')
-#             vtk_folder = os.path.join(config.DATA.TARGET_DATA_PATH, 'vtp')
-            
-#         img_files = []
-#         vtk_files = []
-#         seg_files = []
-
-#         for file_ in os.listdir(img_folder):
-#             file_ = file_[:-8]
-#             img_files.append(os.path.join(img_folder, file_+'data.png'))
-#             vtk_files.append(os.path.join(vtk_folder, file_+'graph.vtp'))
-#             seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
-
-#         data_dicts = [
-#             {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
-#         ]
-#         ds = Sat2GraphDataLoader(
-#             data=data_dicts,
-#             augment=True,
-#             use_grayscale=use_grayscale
-#         )
-#         return ds
-#     elif mode == 'test':
-#         img_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
-#         seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'seg')
-#         vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'vtp')
-#         img_files = []
-#         vtk_files = []
-#         seg_files = []
-
-#         for file_ in os.listdir(img_folder):
-#             file_ = file_[:-8]
-#             img_files.append(os.path.join(img_folder, file_+'data.png'))
-#             vtk_files.append(os.path.join(vtk_folder, file_+'graph.vtp'))
-#             seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
-
-#         data_dicts = [
-#             {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
-#         ]
-
-#         if max_samples > 0:
-#             data_dicts = data_dicts[:max_samples]
-#         ds = Sat2GraphDataLoader(
-#             data=data_dicts,
-#             use_grayscale=use_grayscale,
-#             augment=False
-#         )
-#         return ds
-#     elif mode == 'split':
-#         img_folder = os.path.join(config.DATA.DATA_PATH, 'raw')
-#         seg_folder = os.path.join(config.DATA.DATA_PATH, 'seg')
-#         vtk_folder = os.path.join(config.DATA.DATA_PATH, 'vtp')
-#         img_files = []
-#         vtk_files = []
-#         seg_files = []
-
-#         for file_ in os.listdir(img_folder):
-#             file_ = file_[:-8]
-#             img_files.append(os.path.join(img_folder, file_+'data.png'))
-#             vtk_files.append(os.path.join(vtk_folder, file_+'graph.vtp'))
-#             vtk_files.append(os.path.join(vtk_folder, file_ + 'graph.json'))
-#             seg_files.append(os.path.join(seg_folder, file_+'seg.png'))
-
-#         data_dicts = [
-#             {"img": img_file, "vtp": vtk_file, "seg": seg_file} for img_file, vtk_file, seg_file in zip(img_files, vtk_files, seg_files)
-#         ]
-#         random.seed(config.DATA.SEED)
-#         random.shuffle(data_dicts)
-#         train_split = int(split*len(data_dicts))
-#         train_files, val_files = data_dicts[:
-#                                             train_split], data_dicts[train_split:]
-
-#         if max_samples > 0:
-#             train_files = train_files[:max_samples]
-#             val_files = val_files[:round(max_samples * (1 - split))]
-            
-#         train_ds = Sat2GraphDataLoader(
-#             data=train_files,
-#             use_grayscale=use_grayscale,
-#             domain_classification=domain_classification,
-#             augment=True
-#         )
-#         val_ds = Sat2GraphDataLoader(
-#             data=val_files,
-#             use_grayscale=use_grayscale,
-#             domain_classification=domain_classification,
-#             augment=False
-#         )
-#         return train_ds, val_ds, None
 
 def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use_grayscale=False, domain_classification=-1, mixed=False, has_val=False):
     """Build road network dataset.
