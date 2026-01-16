@@ -372,7 +372,7 @@ if __name__ == '__main__':
     parser.add_argument('--sspt', default=False, action="store_true",
                         help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
     parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
-    parser.add_argument('--vis_path', type=float, default=0.0018, help="folder where to save output visualizations")
+    parser.add_argument('--vis_path', type=str, default='', help="folder where to save output visualizations")
 
 
 

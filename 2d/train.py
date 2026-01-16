@@ -59,6 +59,7 @@ parser.add_argument('--no_strict_loading', default=False, action="store_true",
 parser.add_argument('--sspt', default=False, action="store_true",
                     help="Whether the model was pretrained with self supervised pretraining. If true, the checkpoint will be loaded accordingly. Only combine with resume.")
 parser.add_argument('--display_prob', type=float, default=0.0018, help="Probability of plotting the overlay image with the graph")
+parser.add_argument('--vis_path', type=str, default='', help="folder where to save output visualizations")
 
 
 class obj:
@@ -84,6 +85,7 @@ def main(args):
     config.log.exp_name = args.exp_name
 
     config.display_prob = args.display_prob
+    config.vis_path = args.vis_path
 
     if args.cuda_visible_device:
         os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(
@@ -355,9 +357,10 @@ if __name__ == '__main__':
     
     
     # --- PRE-TRAINING --- 
-    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth1',
-    #                           '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_synth.yaml',
-    #                          ])
+    args = parser.parse_args(['--exp_name', 'pretraining_mixed_synth1',
+                              '--config', '/home/scavone/cross-dim_i2g/2d/configs/pretrained_config_2d_synth.yaml',
+                              '--vis_path', ''
+                             ])
     
     
     # --- FINE TUNING ---
@@ -378,11 +381,11 @@ if __name__ == '__main__':
     
     
     # --- FINE TUNING ---
-    args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
-                            '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
-                            '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
-                            '--no_strict_loading'
-                            ])
+    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
+    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
+    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+    #                         '--no_strict_loading'
+    #                         ])
 
     import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy('file_system')
