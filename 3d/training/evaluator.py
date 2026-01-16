@@ -557,7 +557,7 @@ def build_evaluator(val_loader, net, optimizer, scheduler, writer, config, devic
 
     # attach same visualizer used in trainer
     out_dir = os.path.join(
-        "/data/scavone/cross-dim_i2g_3d/visual di prova",
+        config.vis_path,
         "runs",
         f"{config.log.exp_name}_{config.DATA.SEED}",
         "debug_vis_val"
