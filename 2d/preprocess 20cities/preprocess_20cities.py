@@ -28,6 +28,53 @@ def make_rng(base_seed, image_key=None):
     mix = hash((base_seed, image_key)) & 0xFFFFFFFF
     return np.random.default_rng(mix)
 
+def save_patch_graph_vtp(nodes_p, edges_p, S, out_path):
+    """
+    Save the patch graph as a .vtp polyline file (similar to generate_sat_data.py).
+    nodes_p : (N,2) float32 local patch coordinates
+    edges_p : (E,2) int node indices
+    S       : patch size (used to normalize coords to [0,1])
+    """
+    import numpy as np
+    try:
+        import pyvista as pv
+    except ImportError as e:
+        raise RuntimeError(
+            "pyvista is required when using --graph_format vtp or both. "
+            "Install it with `pip install pyvista`."
+        ) from e
+
+    nodes_p = np.asarray(nodes_p, dtype=np.float32)
+    E = np.asarray(edges_p, dtype=np.int64)
+
+    if nodes_p.size == 0:
+        # empty polydata
+        mesh = pv.PolyData(np.zeros((0, 3), dtype=np.float32))
+        mesh.save(str(out_path))
+        return
+
+    # 2D -> 3D points, normalized by patch size like in generate_sat_data.py
+    pts = np.zeros((nodes_p.shape[0], 3), dtype=np.float32)
+    pts[:, 0] = nodes_p[:, 0] / float(S)
+    pts[:, 1] = nodes_p[:, 1] / float(S)
+    # z = 0
+
+    if E.size:
+        E = E.reshape(-1, 2)
+        # prepend "2" to each edge to indicate a 2-point line
+        lines = np.concatenate(
+            (2 * np.ones((E.shape[0], 1), dtype=np.int32), E.astype(np.int32)),
+            axis=1
+        )
+    else:
+        lines = np.zeros((0, 3), dtype=np.int32)
+
+    mesh = pv.PolyData(pts)
+    if lines.size:
+        mesh.lines = lines.flatten()
+    mesh.save(str(out_path))
+
+
 def load_graph_pickle_20cities(pkl_path):
     """
     Expects a pickled Python dict: {(x,y): [(x1,y1), (x2,y2), ...], ...}
@@ -313,39 +360,6 @@ def sweep_best_patch(img_np, seg_np, nodes_xy, edges_ix, S, stride=32, crop_fn=c
     _, x0, y0, img_p, seg_p, nodes_p, edges_p = best
     return x0, y0, img_p, seg_p, nodes_p, edges_p
 
-# def sample_patch(img_np, seg_np, nodes_xy, edges_ix, S, min_fg_pixels=0,
-#                  require_graph=False, max_tries=2000, stem=None, rng=None):
-
-#     H, W = seg_np.shape
-#     tries = 0
-
-#     assert rng is not None
-
-#     while True:
-
-#         x0 = int(rng.integers(0, W - S + 1))
-#         y0 = int(rng.integers(0, H - S + 1))
-
-#         img_p, seg_p, nodes_p, edges_p = crop_with_clipping(
-#             img_np, seg_np, nodes_xy, edges_ix, x0, y0, S
-#         )
-
-#         fg = int(np.count_nonzero(seg_p))
-
-#         ok_fg = (min_fg_pixels <= 0) or (fg >= min_fg_pixels)
-#         ok_graph = (not require_graph) or (nodes_p.shape[0] > 0 or edges_p.shape[0] > 0)
-
-#         if ok_fg and ok_graph:
-#             return x0, y0, img_p, seg_p, nodes_p, edges_p
-
-#         tries += 1
-
-#         if tries >= max_tries:
-#             return sweep_best_patch(
-#                 img_np, seg_np, nodes_xy, edges_ix, S,
-#                 stride=max(8, S//4),
-#                 crop_fn=crop_with_clipping
-#             )
             
 def sample_patch(
     img_np, seg_np, nodes_xy, edges_ix, S,
@@ -645,7 +659,16 @@ def main(args):
                 Image.fromarray(img_p).save(out_imgseg / f"{patch_name}_sat.png")
                 seg_vis = (seg_p.astype(np.uint8) * 255) if seg_p.dtype != np.uint8 else (seg_p * 255)
                 Image.fromarray(seg_vis, mode="L").save(out_imgseg / f"{patch_name}_gt.png")
-                save_patch_graph(nodes_p, edges_p, args.patch_size, out_vtp / f"{patch_name}_gt_graph.pickle")
+
+                graph_stem = out_vtp / f"{patch_name}_gt_graph"
+
+                # Save according to chosen format
+                if args.graph_format in ("pickle", "both"):
+                    save_patch_graph(nodes_p, edges_p, args.patch_size, graph_stem.with_suffix(".pickle"))
+
+                if args.graph_format in ("vtp", "both"):
+                    save_patch_graph_vtp(nodes_p, edges_p, args.patch_size, graph_stem.with_suffix(".vtp"))
+
 
                 written += 1
                 written_sp += 1
@@ -672,6 +695,7 @@ if __name__ == "__main__":
     ap.add_argument("--out_root", required=True, help="output root for patches")
     ap.add_argument("--patch_size", type=int, default=128)
     ap.add_argument("--patches_per_image", type=int, default=None, help="random patches per region (used if no totals provided)")
+    ap.add_argument("--graph_format", choices=["pickle", "vtp", "both"], default="pickle", help="Graph file format to save: 'pickle' (20Cities dict), 'vtp' (PolyData), or 'both'.")
     ap.add_argument("--simplify_theta", type=float, default=160.0, help="remove degree-2 nodes with angle >= theta")
     ap.add_argument("--min_fg_pixels", type=int, default=50, help="reject random patch if seg foreground < this")
     ap.add_argument("--seed", type=int, default=42)
@@ -691,7 +715,8 @@ if __name__ == "__main__":
     args = ap.parse_args(['--root', '/data/scavone/20cities',
                           '--out_root', '/data/scavone/20cities/patches',
                           '--split', '/data/scavone/20cities/splits.csv',
-                          '--overlap', '0.3',
+                          '--graph_format', 'both',
+                          '--overlap', '0.35',
                           '--num_train', '99200',
                           '--num_val', '24800',
                           '--num_test', '25000'])

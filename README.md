@@ -1,12 +1,10 @@
 # 🧠 Image to Graph Vessel
 
-Clean setup and run instructions with minimal friction and a bit of visual structure ✨
+Clean setup and run instructions with minimal friction ✨
 
 ---
 
 ## 📥 Download the Code
-
-Clone the repository:
 
 ```bash
 git clone https://github.com/alexscavo/Image-to-Graph-Vessel.git
@@ -38,27 +36,18 @@ uv --version
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Reload the shell (or open a new terminal), then verify:
+Reload the shell and verify:
 
 ```bash
 uv --version
 ```
 
-> uv is installed in `~/.cargo/bin` (Linux) or `%USERPROFILE%\.cargo\bin` (Windows) and added to PATH automatically.
-
 ---
 
 ### 2️⃣ Create and Activate the Virtual Environment
 
-Move into the folder where you want the environment and run:
-
 ```bash
 uv venv --python 3.10
-```
-
-Activate it:
-
-```bash
 source .venv/bin/activate
 ```
 
@@ -70,8 +59,8 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-⚠️ Not all dependencies are listed.  
-Run `train.py`, check missing-module errors, and install them manually:
+Some dependencies are missing from `requirements.txt`.  
+Run `train.py`, inspect the error, and install them manually:
 
 ```bash
 uv pip install package_name
@@ -81,53 +70,103 @@ uv pip install package_name
 
 ### 4️⃣ Install MultiScaleDeformableAttention (2D / 3D)
 
-You will eventually see:
+If you encounter:
 
 ```bash
 ModuleNotFoundError: No module named 'MultiScaleDeformableAttention2D'
 ```
 
-Follow these steps on **Windows**:
-
-#### 4.1 Open
-**x64 Native Tools Command Prompt for VS**  
-(Visual Studio Build Tools must be installed)
-
-#### 4.2 Activate the Same Virtual Environment
-
-```bash
-cd C:\...\Image-to-Graph-Vessel
-.\.venv\Scripts\activate
-```
-
-#### 4.3 Set Required Variables
+Open **x64 Native Tools Command Prompt for VS**, activate the venv, then:
 
 ```bash
 set DISTUTILS_USE_SDK=1
 set MSSdk=1
 ```
 
-#### 4.4 Build 2D Ops
-
+#### 2D
 ```bash
 cd 2d/models/ops
 python -m pip install -U pip setuptools wheel ninja
 python -m pip install -e . --no-build-isolation -v
 ```
 
-For **3D**, repeat the same steps in:
+#### 3D
+Repeat the same steps in:
 
 ```bash
 3d/models/ops
 ```
 
-#### 🔧 Requirements
-Make sure you have:
-- CUDA installed
-- Visual Studio Build Tools with:
-  - Desktop development with C++
-  - MSVC v143 (VS 2022) or v142 (VS 2019)
-  - Windows 10/11 SDK
+Ensure CUDA and Visual Studio Build Tools are installed.
+
+---
+
+## 🧱 Preprocessing (Dataset Construction)
+
+Before training, datasets must be **constructed and preprocessed**.  
+This step is required for **each dataset** (source and target, 2D and/or 3D).
+
+### 1️⃣ Create Dataset Splits
+
+Run `create_splits.py` and set the **total number of patches** to generate.  
+The script computes all required statistics and produces `splits.csv`.
+
+```bash
+python create_splits.py
+```
+
+---
+
+### 2️⃣ Extract Patches
+
+After creating the splits, extract the patches using the appropriate script.
+
+#### 🔹 2D Datasets
+
+Scripts are named:
+
+```text
+preprocess_<dataset_name>.py
+```
+
+They are located in the same folder as `create_splits.py`.
+
+You must specify:
+- the path to the corresponding `splits.csv`
+- dataset folders (check names like `raw`, `seg`, `labels`, `vtp`, `graphs`, etc.)
+- number of patches to generate
+- overlap between patches
+
+🚫 **Do not change output folder names**, as the training pipeline depends on them.
+
+---
+
+#### 🔹 3D Datasets
+
+Patch extractors are located in:
+
+- **Roads (satellite)**  
+  ```text
+  3d/data/generate_sat_data.py
+  ```
+
+- **Vessels (synthetic)**  
+  ```text
+  3d/data/generate_synth_data.py
+  ```
+
+Specify:
+- the correct `splits.csv`
+- dataset root folders
+- number of patches
+- overlap
+
+Ensure folder names match the dataset structure and  
+**do not modify output folder names**.
+
+📝 **Note (Roads – 2D)**  
+For the roads patch extractor, it is **expected behavior** that the **raw images and segmentation masks are saved in the same output folder**.  
+This is intentional and required by the downstream loading pipeline.
 
 ---
 
@@ -135,14 +174,14 @@ Make sure you have:
 
 ### 🏋️ Training
 
-All arguments are configured inside `train.py`.
+All arguments are configured in `train.py`.
 
-**Pretraining requires:**
+**Pretraining**
 - `exp_name`
 - `config`
-- `continuous` (recommended)
+- `continuous`
 
-**Finetuning requires:**
+**Finetuning**
 - `exp_name`
 - `config`
 - `continuous`
@@ -155,32 +194,25 @@ All arguments are configured inside `train.py`.
 
 ### ⚠️ Configuration Checklist
 
-Always double-check your config files:
-
+Verify:
 - `SOURCE_DATA_PATH`
 - `TARGET_DATA_PATH`
 - `NUM_SOURCE_SAMPLES`, `NUM_TARGET_SAMPLES`
 - `DATASET`
 - `IMG_SIZE`, `PAD_SIZE`
 - `ALPHA_COEFF`
-- `EDGE_SAMPLING_MODE` (use "up" to match the paper)
-- `UPSAMPLING_TARGET_DOMAIN` (critical for 3D)
+- `EDGE_SAMPLING_MODE` → "up"
+- `UPSAMPLING_TARGET_DOMAIN`
 - `EDGE_SAMPLING_RATIO` → `0.15`
 - `NUM_EDGE_SAMPLES` → `9999`
-- All loss weights
+- loss weights
 
 ---
 
 ### 🧪 Testing
 
-Run:
-
 ```bash
 python test.py
 ```
 
-Make sure the correct config file is set before execution and all the necessary arguments.
-
----
-
-Everything should now be ready. Happy experimenting 🧪✨
+Ensure the correct config file is selected before running.
