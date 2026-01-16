@@ -13,6 +13,7 @@ from data.dataset_mixed import build_mixed_data
 from data.dataset_road_network import build_road_network_data
 from data.dataset_synthetic_eye_vessels import build_synthetic_vessel_network_data
 from data.dataset_real_eye_vessels import build_real_vessel_network_data
+from data.dataset_plants import build_plants_network_data
 from training.evaluator import build_evaluator
 from training.trainer import build_trainer
 from models import build_model
@@ -107,20 +108,27 @@ def main(args):
     torch.backends.cudnn.enabled = True
     torch.multiprocessing.set_sharing_strategy('file_system')
     device = torch.device("cuda") if args.device == 'cuda' else torch.device("cpu")
-
-    if config.DATA.DATASET == 'road_dataset':
-        build_dataset_function = build_road_network_data
-        config.DATA.MIXED = False
-    elif config.DATA.DATASET == 'synthetic_eye_vessel_dataset':
-        build_dataset_function = build_synthetic_vessel_network_data
-        config.DATA.MIXED = False
-    elif config.DATA.DATASET == 'real_eye_vessel_dataset':
-        build_dataset_function = build_real_vessel_network_data
-        config.DATA.MIXED = False
-    elif config.DATA.DATASET == 'mixed_road_dataset' or config.DATA.DATASET == 'mixed_synthetic_eye_vessel_dataset' or config.DATA.DATASET == "mixed_real_eye_vessel_dataset":
+    
+    if config.DATA.MIXED:
+        print("Using mixed dataset")
         build_dataset_function = partial(build_mixed_data, upsample_target_domain=config.TRAIN.UPSAMPLE_TARGET_DOMAIN)
-        config.DATA.MIXED = True
-
+    else:
+        print("Using single dataset")
+        dataset_name = config.DATA.TARGET_DATASET_NAME
+        
+        if dataset_name == 'roads':
+            build_dataset_function = build_road_network_data
+            
+        elif dataset_name == 'octa-synth':
+            build_dataset_function = build_synthetic_vessel_network_data
+            
+        elif dataset_name == 'octa-real':
+            build_dataset_function = build_real_vessel_network_data
+        
+        elif dataset_name == 'plants':
+            build_dataset_function = build_plants_network_data
+    
+    
     # check if the val set is already provided, or if we need to use the random split with 0.8
     root = Path(config.DATA.TARGET_DATA_PATH)
     val_root = root / "val"
@@ -384,6 +392,23 @@ if __name__ == '__main__':
     # args = parser.parse_args(['--exp_name', 'finetuning_mixed_real_1',
     #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_real.yaml',
     #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_real_1_10/models/checkpoint_epoch=50.pt',
+    #                         '--no_strict_loading'
+    #                         ])
+    
+    ########################################
+    ########  PLANTS + OCTA SYNTH  #########
+    ########################################    
+    
+    # --- PRE-TRAINING --- 
+    args = parser.parse_args(['--exp_name', 'pretraining_mixed_plant_synth',
+                              '--config', '2d/configs/pretrain_plants_octa_synth.yaml',
+                             ])
+    
+    
+    # --- FINE TUNING ---
+    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_short',
+    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
+    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
     #                         '--no_strict_loading'
     #                         ])
 

@@ -72,7 +72,7 @@ def as_int_edges(edges):
         return E.reshape(0,2).astype(np.int64)
     return E.astype(np.int64)
 
-def visualize_graph_batch(
+'''def visualize_graph_batch(
     samples,
     n=6,
     mean=(0.485, 0.456, 0.406),
@@ -83,9 +83,9 @@ def visualize_graph_batch(
     alpha_img=1.0,
 ):
     """
-    Layout per sample:
-      Row 1: [ Image | GT graph | Pred graph ]
-      Row 2: [ SMD (normalized) | SMD (pixel space) | empty ]
+    Layout per sample (2 rows, 4 columns):
+      Row 1: [ Raw Image | GT Graph Overlay | Pred Graph Overlay | Empty/Extra ]
+      Row 2: [ GT Segmentation | Pred Segmentation | SMD Plot | Empty ]
     """
 
     imgs = samples["images"]
@@ -226,8 +226,155 @@ def visualize_graph_batch(
     plt.tight_layout()
     return fig
 
+'''
+
+def visualize_graph_batch(
+    samples,
+    n=1,
+    mean=(0.485, 0.456, 0.406),
+    std=(0.229, 0.224, 0.225),
+    point_size=10,
+    linewidth=1.0,
+    figsize_per_row=(6, 6),
+    alpha_img=1.0,
+):
+    """
+    Layout per sample:
+      Row 1: [ Image | GT graph | Pred graph | Empty ]
+      Row 2: [ GT Seg | Pred Seg | SMD Plot | Empty ]
+    """
+    imgs = samples["images"]
+    B = len(imgs) if isinstance(imgs, (list, tuple)) else imgs.shape[0]
+    n = min(n, B)
+
+    rows = n * 2
+    cols = 4  # Expanded for side-by-side masks
+    fig, axs = plt.subplots(
+        rows,
+        cols,
+        figsize=(figsize_per_row[0] * cols, figsize_per_row[1] * rows),
+    )
+
+    if rows == 1: axs = axs[None, :]
+
+    sinkhorn = SinkhornDistance(eps=1e-7, max_iter=100, reduction="none")
+
+    for i in range(n):
+        row0 = 2 * i       
+        row1 = 2 * i + 1   
+
+        im_t = imgs[i]
+        vis, cmap = denorm_img(im_t, mean=mean, std=std)
+        H, W = vis.shape[:2]
+
+        gt_nodes_pix = to_pixel_space(samples.get("nodes", [None])[i], H, W)
+        gt_edges     = as_int_edges(samples.get("edges", [None])[i])
+        pr_nodes_pix = to_pixel_space(samples.get("pred_nodes", [None])[i], H, W)
+        pr_edges     = as_int_edges(samples.get("pred_edges", [None])[i])
+        
+        gt_seg = samples.get("seg", [None])[i]
+        pr_seg = samples.get("pred_seg", [None])[i]
+
+        # --- ROW 1: Raw Image + Graphs ---
+        axs[row0, 0].imshow(vis, cmap=cmap)
+        axs[row0, 0].set_title("Raw Image")
+        axs[row0, 0].axis("off")
+
+        for ax, nodes, edges, title, color in zip(
+            [axs[row0, 1], axs[row0, 2]], 
+            [gt_nodes_pix, pr_nodes_pix], 
+            [gt_edges, pr_edges], 
+            ["GT Graph", "Pred Graph"], ['r', 'b']
+        ):
+            ax.imshow(vis, alpha=alpha_img, cmap=cmap)
+            if nodes is not None and len(nodes) > 0:
+                ax.scatter(nodes[:, 0], nodes[:, 1], s=point_size, c=color)
+                for (u, v) in edges:
+                    ax.plot([nodes[u, 0], nodes[v, 0]], [nodes[u, 1], nodes[v, 1]], c=color, lw=linewidth)
+            ax.set_title(title)
+            ax.axis("off")
+        axs[row0, 3].axis("off")
+
+        # --- ROW 2: Segmentation + SMD ---
+        # 1. GT Segmentation
+        if gt_seg is not None:
+            # Squeeze to handle [1, H, W] or [H, W]
+            axs[row1, 0].imshow(gt_seg.detach().cpu().squeeze().numpy(), cmap='gray')
+            axs[row1, 0].set_title("GT Segmentation")
+        axs[row1, 0].axis("off")
+
+        # 2. Predicted Segmentation (Roads)
+        if pr_seg is not None:
+            # Apply Sigmoid + Threshold as these are raw logits
+            prob = torch.sigmoid(pr_seg).detach().cpu().squeeze().numpy()
+            axs[row1, 1].imshow(prob > 0.5, cmap='gray')
+            axs[row1, 1].set_title("Pred Segmentation")
+        axs[row1, 1].axis("off")
+
+        # 3. SMD Plot (Existing logic)
+        gt_nodes_norm = samples.get("nodes", [None])[i]
+        pr_nodes_norm = samples.get("pred_nodes", [None])[i]
+        
+        # first column of row1 unused
+        axs[row1, 0].axis("off")
+        axs[row1, 2].axis("off")
+
+        if gt_nodes_norm is None or pr_nodes_norm is None:
+            # nothing to show
+            axs[row1, 0].axis("off")
+            axs[row1, 1].axis("off")
+            axs[row1, 2].axis("off")
+            continue
+
+        # --- ensure torch tensors for SMD
+        gt_nodes_norm_t = torch.as_tensor(gt_nodes_norm, dtype=torch.float32)
+        pr_nodes_norm_t = torch.as_tensor(pr_nodes_norm, dtype=torch.float32)
+
+        # edges as torch for adj construction
+        if gt_edges is not None and len(gt_edges) > 0:
+            gt_edges_t = torch.as_tensor(gt_edges, dtype=torch.long)
+        else:
+            gt_edges_t = torch.zeros((0, 2), dtype=torch.long)
+
+        if pr_edges is not None and len(pr_edges) > 0:
+            pr_edges_t = torch.as_tensor(pr_edges, dtype=torch.long)
+        else:
+            pr_edges_t = torch.zeros((0, 2), dtype=torch.long)
+
+        # ---------- A) SMD on normalized coordinates ----------
+        A_norm = torch.zeros((gt_nodes_norm_t.shape[0], gt_nodes_norm_t.shape[0]), dtype=torch.float32)
+        if len(gt_edges_t) > 0:
+            A_norm[gt_edges_t[:, 0], gt_edges_t[:, 1]] = 1.0
+
+        pred_A_norm = torch.zeros((pr_nodes_norm_t.shape[0], pr_nodes_norm_t.shape[0]), dtype=torch.float32)
+        if len(pr_edges_t) > 0:
+            pred_A_norm[pr_edges_t[:, 0], pr_edges_t[:, 1]] = 1.0
+
+        y_pc_norm      = get_point_cloud(A_norm.T,      gt_nodes_norm_t, n_points=100)
+        output_pc_norm = get_point_cloud(pred_A_norm.T, pr_nodes_norm_t, n_points=100)
+
+        smd_norm, _, _ = sinkhorn(y_pc_norm, output_pc_norm)
+
+        ax_smd_norm = axs[row1, 2]
+        ax_smd_norm.scatter(y_pc_norm[:, 0].cpu(),      y_pc_norm[:, 1].cpu(),
+                            s=5, label="GT (norm)")
+        ax_smd_norm.scatter(output_pc_norm[:, 0].cpu(), output_pc_norm[:, 1].cpu(),
+                            s=5, label="Pred (norm)")
+        
+        # DEBUG
+        num_edges = int(A_norm.sum().item())
 
 
+        ax_smd_norm.set_title(f"SMD (norm) = {smd_norm.item():.4f}: {len(gt_nodes_norm_t)} nodes, {num_edges} edges")
+        ax_smd_norm.set_xlim(0, 1)
+        ax_smd_norm.set_ylim(0, 1)
+        ax_smd_norm.legend(fontsize=7)
+        ax_smd_norm.axis("off")
+        axs[row1, 2].axis("off")
+        axs[row1, 3].axis("off")
+
+    plt.tight_layout()
+    return fig
 
 # ---------- low-probability saver for training ----------
 class DebugVisualizer:
@@ -248,30 +395,24 @@ class DebugVisualizer:
     def start_epoch(self):
         self._emitted_in_epoch = 0
 
-    def maybe_save(self,
-                   images_bchw,           # (B,C,H,W) torch.Tensor
-                   gt_nodes_list,         # list length B, each (Ni,2) tensor
-                   gt_edges_list,         # list length B, each (Ei,2) tensor
-                   pred_nodes_list,       # list length B, each (Mi,2) tensor/np
-                   pred_edges_list,       # list length B, each (Pi,2) tensor/np
-                   epoch, step, batch_index=0, tag="train"):
-        if self._emitted_in_epoch >= self.max_per_epoch:
-            return
-        if random.random() >= self.prob:
+    def maybe_save(self, images_bchw, gt_nodes_list, gt_edges_list, 
+               pred_nodes_list, pred_edges_list, epoch, step, 
+               batch_index=0, tag="train", gt_seg=None, pred_seg=None):
+        
+        if self._emitted_in_epoch >= self.max_per_epoch or random.random() >= self.prob:
             return
 
-        # Build a one-sample dict compatible with visualize_graph_batch
         sample = {
             "images":     [images_bchw[batch_index].detach().cpu()],
             "nodes":      [gt_nodes_list[batch_index]],
             "edges":      [gt_edges_list[batch_index]],
             "pred_nodes": [pred_nodes_list[batch_index]],
-            "pred_edges": [pred_edges_list[batch_index] if pred_edges_list is not None else np.zeros((0,2), dtype=np.int64)],
+            "pred_edges": [pred_edges_list[batch_index]],
+            "seg":        [gt_seg[batch_index] if gt_seg is not None else None],
+            "pred_seg":   [pred_seg[batch_index] if pred_seg is not None else None],
         }
 
-        fig = visualize_graph_batch(sample, n=1,
-                                    mean=self.denorm_mean, std=self.denorm_std,
-                                    point_size=10, linewidth=1.0, figsize_per_row=(6,6), alpha_img=1.0)
+        fig = visualize_graph_batch(sample, n=1, mean=self.denorm_mean, std=self.denorm_std)
 
         fname = f"{tag}_e{int(epoch):03d}_it{int(step):06d}_b{int(batch_index)}.png"
         fpath = os.path.join(self.out_dir, fname)

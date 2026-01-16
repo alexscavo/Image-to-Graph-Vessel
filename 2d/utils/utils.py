@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 import torch
 import numpy as np
 import pyvista
@@ -248,3 +249,51 @@ def downsample_edges(relation_pred, edge_labels, sample_ratio, acceptance_interv
             (torch.ones(target_pos_edges.shape[0], dtype=torch.long, device=relation_pred.device), 
              torch.zeros(target_neg_edges.shape[0], dtype=torch.long, device=relation_pred.device)))
         )
+    
+
+
+def load_graph_from_json(file_path: Path):
+    """
+    Returns:
+      nodes_xy: (N,2) float32, pixel coords (x,y)
+      edges:    (E,2) int64, indices into nodes_xy (not FeatureID)
+      feat_ids: (N,) int64, original FeatureID per row in nodes_xy
+      types:    list[str], FeatureType per node (optional but often useful)
+    """
+    
+    # open the annotation file
+    with open(file_path, 'r') as f:
+        ann = json.load(f)
+        
+    # get the plant image annotations and features
+    plant_img = ann["VineImage"][0]
+    features = plant_img["VineFeature"][0]
+    
+    features_ids = [int(feat["FeatureID"]) for feat in features]
+    
+    # nodes in ID space
+    nodes_by_id = {}
+    for feat in features:
+        fid = int(feat["FeatureID"])
+        nodes_by_id[fid] = tuple(feat["FeatureCoordinates"])
+        
+    # edges in ID space
+    edges_by_id = []
+    for feat in features:
+        pid = feat.get("ParentID", None)    # ParentID
+        if pid is None:
+            continue
+        
+        pid = int(pid)
+        cid = int(feat["FeatureID"])  # child ID
+    
+        edges_by_id.append((pid, cid))
+
+    # convert node ids into indeces to have dense indeces between 0 - N-1
+    feat_ids = sorted(nodes_by_id.keys())
+    id_to_idx = {fid: idx for idx, fid in enumerate(feat_ids)}
+    
+    nodes_xy = np.array([nodes_by_id[fid] for fid in feat_ids], dtype=np.float32)
+    edges_ix = np.array([[id_to_idx[pid], id_to_idx[cid]] for pid, cid in edges_by_id], dtype=np.int64)
+    
+    return nodes_xy, edges_ix

@@ -17,11 +17,11 @@ You only need to edit the three paths below:
 """
 
 # ---------- paths (EDIT THESE) ----------
-sat_path   = '/data/scavone/20cities/patches/train/raw/sample_000044_data.png'
-gt_path    = '/data/scavone/20cities/patches/train/seg/sample_000044_seg.png'
-graph_path = '/data/scavone/20cities/patches/train/vtp/sample_000044_graph.vtp'
+sat_path   = '/data/scavone/plants_3d2cut/patches/train/raw/Set00_IMG_3283_000000.png'
+gt_path    = '/data/scavone/plants_3d2cut/patches/train/labels/Set00_IMG_3283_000000_seg.png'
+graph_path = '/data/scavone/plants_3d2cut/patches/train/graphs/Set00_IMG_3283_000000_gt_graph.vtp'
 
-out_dir    = "/data/scavone/prova_vtp_overlay"
+out_dir    = "/data/scavone/overlay_prova/plants_vtp"
 os.makedirs(out_dir, exist_ok=True)
 
 # ---------- overlay params ----------

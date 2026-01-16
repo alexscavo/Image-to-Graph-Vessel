@@ -45,7 +45,7 @@ class RelationformerTrainer(SupervisedTrainer):
         # ---- predictions for visualization ----
         pred_nodes, pred_edges = relation_infer(
             h.detach(), out, self.network[0],
-            80, 2,
+            80, 5,
             nms=False, map_=False
         )
         
@@ -132,7 +132,7 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
             save_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (config.log.exp_name, config.DATA.SEED),
                                   './models'),
             save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
-            save_interval=10,   # 5
+            save_interval=5,   # 5
             n_saved=2   # 5
         ),        
         TensorBoardStatsHandler(
@@ -239,7 +239,7 @@ def build_trainer(train_loader, net, seg_net, loss, optimizer, scheduler, writer
         train_handlers=train_handlers,
         key_train_metric=key_train_metric,
         additional_metrics=additional_metrics,
-        # amp=fp16,
+        amp=fp16,
     )
 
     out_dir = os.path.join(
