@@ -59,53 +59,7 @@ class Sat2GraphDataLoader(Dataset):
         Returns:
             [type]: [description]
         """
-        return len(self.data)
-
-    # def __getitem__(self, idx):
-    #     """[summary]
-
-    #     Args:
-    #         idx ([type]): [description]
-
-    #     Returns:
-    #         [type]: [description]
-    #     """
-    #     data = self.data[idx]
-    #     vtk_data = pyvista.read(data['vtp'])
-    #     raw_seg_data = Image.open(data['seg'])
-
-    #     seg_data = np.array(raw_seg_data)
-    #     seg_data = np.array(seg_data)/np.max(seg_data)
-    #     seg_data = torch.tensor(seg_data, dtype=torch.int).unsqueeze(0)
-
-    #     image_data = Image.open(data['img'])
-
-    #     if self.use_grayscale:
-    #         image_data = np.array(self.grayscale(image_data))
-    #         image_data = torch.tensor(
-    #             image_data, dtype=torch.float).permute(2, 0, 1)
-    #         image_data = image_data / 255.0
-    #         image_data -= 0.5
-    #     else:
-    #         image_data = np.array(image_data)
-    #         image_data = torch.tensor(
-    #             image_data, dtype=torch.float).permute(2, 0, 1)
-    #         image_data = image_data / 255.0
-    #         image_data = tvf.normalize(image_data.clone().detach(), mean=self.mean, std=self.std)
-
-    #     nodes = torch.tensor(np.float32(
-    #         np.asarray(vtk_data.points)), dtype=torch.float)[:, :2]
-    #     lines = torch.tensor(np.asarray(
-    #         vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)
-
-    #     if self.augment:
-    #         angle = random.randint(0, 3) * 90
-    #         image_data = rotate(image_data, angle)
-    #         seg_data = rotate(seg_data, angle)
-    #         nodes = rotate_coordinates(nodes, angle)
-
-    #     return image_data, seg_data-0.5, nodes, lines[:, 1:], self.domain_classification
-    
+        return len(self.data)    
     
     def __getitem__(self, idx):
         """[summary]
