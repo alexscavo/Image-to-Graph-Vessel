@@ -4,18 +4,33 @@ DATA:
   TEST_BATCH_SIZE: 128 #16
 
   DATA_PATH: ""   # octa-synth-packed_bigger_inverted
-  MIXED: True
+  
+  MIXED_SOURCE: True  # if true, SOURCE_DATASET_NAME is treated as a list and concatenated
+  MIXED: True   # if true, the model will be trained jointly on source and target sets
 
-  SOURCE_DATASET_NAME: "plants"
-  SOURCE_DATA_PATH: "/data/scavone/plants_3d2cut/patches" # Path to dataset, could be overwritten by command line argument
-  NUM_SOURCE_SAMPLES: -1  # -1
+  # mixed source case (when MIXED_SOURCE: true)
+  SOURCE_DATASET_NAME:
+    - "roads"
+    - "plants"
 
+  # explicit counts per source dataset
+  NUM_SOURCE_SAMPLES_BY_DATASET:
+    roads: 25900
+    plants: 25900
+
+  # target stays single (no mixing)
   TARGET_DATASET_NAME: "octa-synth"
-  NUM_TARGET_SAMPLES: 480  # 480
+  NUM_TARGET_SAMPLES: 480
+
+  # explicit per-source paths
+  SOURCE_DATA_PATHS:
+    roads: "/data/scavone/20cities/patches_mie"
+    plants: "/data/scavone/plants_3d2cut/patches"
+
   TARGET_DATA_PATH: "/data/scavone/octa-synth-packed/patches"
 
   COMPUTE_TARGET_GRAPH_LOSS: True
-  TEST_DATA_PATH: "/data/scavone/plants_3d2cut/patches"
+  TEST_DATA_PATH: "/data/scavone/octa-synth-packed/patches"
 
   IMG_SIZE: [128, 128] # Input image size
   NUM_WORKERS: 4 # Number of data loading threads
