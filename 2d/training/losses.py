@@ -85,6 +85,7 @@ class SetCriterion(nn.Module):
         self.edge_sampling_mode = edge_sampling_mode
         self.sample_ratio = config.TRAIN.EDGE_SAMPLE_RATIO
         self.sample_ratio_interval = config.TRAIN.EDGE_SAMPLE_RATIO_INTERVAL
+        self.edge_sev_eta = config.TRAIN.EDGE_SEV_ETA
         if config.DATA.MIXED:
             self.domain_img_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.IMAGE_ADVERSARIAL else None
             self.domain_inst_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.GRAPH_ADVERSARIAL else None
@@ -104,7 +105,7 @@ class SetCriterion(nn.Module):
                             'edges':config.TRAIN.W_EDGE,
                             'domain':config.TRAIN.W_DOMAIN
                             }
-        
+    
     def loss_class(self, outputs, indices):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
@@ -113,21 +114,11 @@ class SetCriterion(nn.Module):
         weight = torch.tensor([0.2, 0.8]).to(outputs.get_device())
         
         idx = self._get_src_permutation_idx(indices)
-
-        # targets = torch.zeros(outputs.shape[:-1], dtype=outputs.dtype).to(outputs.get_device())
-        # targets[idx] = 1.0
-        
-        # targets = targets.unsqueeze(-1)
-        
-        # num_nodes = targets.sum()
-        # # loss = F.cross_entropy(outputs.permute(0,2,1), targets, weight=weight, reduction='mean')
-        # loss = sigmoid_focal_loss(outputs, targets, num_nodes)
         
         targets = torch.zeros(outputs[...,0].shape, dtype=torch.long).to(outputs.get_device())
         targets[idx] = 1.0
         loss = F.cross_entropy(outputs.permute(0,2,1), targets, weight=weight, reduction='mean')
         
-        # cls_acc = 100 - accuracy(outputs, targets_one_hot)[0]
         return loss
     
     def loss_cardinality(self, outputs, indices):
@@ -141,7 +132,7 @@ class SetCriterion(nn.Module):
         tgt_lengths = torch.as_tensor([t.sum() for t in targets], device=outputs.device)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
         card_pred = (outputs.argmax(-1) == outputs.shape[-1] - 1).sum(1)
-        # card_pred = (outputs.sigmoid()>0.5).squeeze(-1).sum(1)
+        
 
         loss = F.l1_loss(card_pred.float(), tgt_lengths.float(), reduction='sum')/(outputs.shape[0]*outputs.shape[1])
 
@@ -181,13 +172,10 @@ class SetCriterion(nn.Module):
         loss = loss.sum() / num_boxes
         return loss
 
-    def loss_edges(self, h, target_nodes, target_edges, indices):
+    def loss_edges(self, h, target_nodes, target_edges, target_edge_sev, indices):
         """Compute the losses related to the masks: the focal loss and the dice loss.
            targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
-        """
-        
-        
-        
+        """        
         # all token except the last one is object token
         object_token = h[...,:self.obj_token,:]
 
@@ -196,22 +184,33 @@ class SetCriterion(nn.Module):
             relation_token = h[..., self.obj_token:self.rln_token+self.obj_token, :]
             
         # map the ground truth edge indices by the matcher ordering
-        target_edges = [[t for t in tgt if t[0].cpu() in i and t[1].cpu() in i] for tgt, (_, i) in zip(target_edges, indices)]
-        target_edges = [torch.stack(t, 0) if len(t)>0 else torch.zeros((0,2), dtype=torch.long).to(h.device) for t in target_edges]
+        filtered_edges = []
+        filtered_sev = []
+        for tgt_e, tgt_s, (_, i) in zip(target_edges, target_edge_sev, indices):
+            keep = [(k, e) for k, e in enumerate(tgt_e) if (e[0].cpu() in i and e[1].cpu() in i)]
+            if len(keep) == 0:
+                filtered_edges.append(torch.zeros((0, 2), dtype=torch.long, device=h.device))
+                filtered_sev.append(torch.zeros((0,), dtype=torch.float, device=h.device))
+            else:
+                ks, es = zip(*keep)
+                filtered_edges.append(torch.stack(list(es), 0).to(h.device))
+                filtered_sev.append(tgt_s[list(ks)].to(h.device))
 
         new_target_edges = []
-        for t, (_, i) in zip(target_edges, indices):
+        new_target_sev = []
+        for t, s, (_, i) in zip(filtered_edges, filtered_sev, indices):
             tx = t.clone().detach()
             for idx, k in enumerate(i):
-                t[tx==k]=idx
+                t[tx == k] = idx
             new_target_edges.append(t)
+            new_target_sev.append(s)
 
-        # all_edges = []
         edge_labels = []
         relation_feature = []
+        edge_weights = []
 
         # loop through each of batch to collect the edge and node
-        for batch_id, (pos_edge, n) in enumerate(zip(new_target_edges, target_nodes)):
+        for batch_id, (pos_edge, pos_sev, n) in enumerate(zip(new_target_edges, new_target_sev, target_nodes)):
 
             # map the predicted object token by the matcher ordering
             rearranged_object_token = object_token[batch_id, indices[batch_id][0],:]
@@ -241,8 +240,8 @@ class SetCriterion(nn.Module):
 
             # restrict unbalance in the +ve/-ve edge
             if self.edge_sampling_mode == EDGE_SAMPLING_MODE.NONE and pos_edge.shape[0]>40:
-                # print('Reshaping')
                 pos_edge = pos_edge[:40,:]
+                pos_sev = pos_sev[:40]
 
             # random sample -ve edge
             idx_ = torch.randperm(neg_edges.shape[0])
@@ -263,6 +262,20 @@ class SetCriterion(nn.Module):
             all_edges_ = torch.cat((pos_edge, neg_edges[:take_neg]), 0)
             # all_edges.append(all_edges_)
             edge_labels.append(torch.cat((torch.ones(pos_edge.shape[0], dtype=torch.long), torch.zeros(take_neg, dtype=torch.long)), 0))
+            # severity weights (positives only), negatives weight = 1
+            eta = getattr(self, "edge_sev_eta", 0.25)  # you can set this in __init__ from config if you want
+            eps = 1e-6
+
+            if pos_sev.numel() > 1:
+                mu = pos_sev.mean()
+                sd = pos_sev.std(unbiased=False).clamp_min(eps)
+                z = (pos_sev - mu) / sd
+            else:
+                z = torch.zeros_like(pos_sev)
+
+            w_pos = 1.0 + eta * torch.sigmoid(z)          # in [1, 1+eta]
+            w_neg = torch.ones((take_neg,), device=pos_edge.device)
+            edge_weights.append(torch.cat((w_pos, w_neg), 0))
 
             # concatenate object token pairs with relation token for all sampled edges
             if self.rln_token > 0:
@@ -279,6 +292,7 @@ class SetCriterion(nn.Module):
         # torch.tensor(list(itertools.combinations(range(n.shape[0]), 2))).to(e.get_device())
         relation_feature = torch.cat(relation_feature, 0)
         edge_labels = torch.cat(edge_labels, 0).to(h.get_device())
+        edge_weights = torch.cat(edge_weights, 0).to(h.get_device())
         relation_pred = self.net.relation_embed(relation_feature)
 
         # valid_edges = torch.argmax(relation_pred, -1)
@@ -295,7 +309,8 @@ class SetCriterion(nn.Module):
             relation_pred, edge_labels = \
                 upsample_edges(relation_pred, edge_labels, ratio, self.sample_ratio_interval)
 
-        loss = F.cross_entropy(relation_pred, edge_labels, reduction='mean')
+        ce = F.cross_entropy(relation_pred, edge_labels, reduction='none')
+        loss = (edge_weights * ce).sum() / edge_weights.sum().clamp_min(1e-6)
 
         return loss
     
@@ -354,6 +369,8 @@ class SetCriterion(nn.Module):
             out['pred_nodes'] = out['pred_nodes'][target['domains'] == 0]
             target['nodes'] = [node_list for i, node_list in enumerate(target['nodes']) if target['domains'][i] == 0]
             target['edges'] = [node_list for i, node_list in enumerate(target['edges']) if target['domains'][i] == 0]
+            target['edge_sev'] = [sev for i, sev in enumerate(target['edge_sev']) if target['domains'][i] == 0]
+            
         
         # When all samples have been removed - return 0 loss
         if len(target['nodes']) == 0:
@@ -374,7 +391,7 @@ class SetCriterion(nn.Module):
         losses['class'] = self.loss_class(out['pred_logits'], indices)
         losses['nodes'] = self.loss_nodes(out['pred_nodes'][...,:2], target['nodes'], indices)
         losses['boxes'] = self.loss_boxes(out['pred_nodes'], target['nodes'], indices)
-        losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], indices)
+        losses['edges'] = self.loss_edges(h, target['nodes'], target['edges'], target['edge_sev'], indices)
         losses['cards'] = self.loss_cardinality(out['pred_logits'], indices)
         if self.domain_img_loss:
             losses['domain'] = self.loss_domains(pred_backbone_domains, target['interpolated_domains'], pred_instance_domains, target['domains'])

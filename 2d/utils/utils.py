@@ -248,3 +248,113 @@ def downsample_edges(relation_pred, edge_labels, sample_ratio, acceptance_interv
             (torch.ones(target_pos_edges.shape[0], dtype=torch.long, device=relation_pred.device), 
              torch.zeros(target_neg_edges.shape[0], dtype=torch.long, device=relation_pred.device)))
         )
+
+
+def _to_edge_index(lines: torch.Tensor) -> torch.Tensor:
+    """
+    Convert various edge encodings to shape [E, 2] long tensor.
+    - If already [E,2], keep.
+    - If VTK lines format flattened or [E,3] with first col being '2', convert.
+    """
+    if lines.numel() == 0:
+        return lines.view(0, 2).long()
+
+    if lines.ndim == 2 and lines.shape[1] == 2:
+        return lines.long()
+
+    # VTK sometimes gives [E,3] = [2, u, v]
+    if lines.ndim == 2 and lines.shape[1] == 3:
+        return lines[:, 1:3].long()
+
+    # Flattened VTK: [2, u, v, 2, u, v, ...]
+    if lines.ndim == 1:
+        flat = lines.long()
+        flat = flat.view(-1, 3)
+        return flat[:, 1:3].long()
+
+    raise ValueError(f"Unsupported lines shape: {tuple(lines.shape)}")
+
+def _bridge_severity_for_edges(num_nodes: int, edges_e2: torch.Tensor) -> torch.Tensor:
+    """
+    Compute severity per undirected edge in `edges_e2` aligned with input order.
+    Severity definition: min(sideA, sideB)/component_size for bridge edges; 0 otherwise.
+    Range [0, 0.5]. Works on forests too.
+    """
+    E = edges_e2.shape[0]
+    if E == 0 or num_nodes == 0:
+        return torch.zeros((E,), dtype=torch.float32)
+
+    # Build adjacency list (undirected)
+    adj = [[] for _ in range(num_nodes)]
+    for (u, v) in edges_e2.tolist():
+        if u == v:
+            continue
+        adj[u].append(v)
+        adj[v].append(u)
+
+    # Find connected component id + size for each node (so severity is per-component)
+    comp_id = [-1] * num_nodes
+    comp_sizes = []
+    cid = 0
+    for s in range(num_nodes):
+        if comp_id[s] != -1:
+            continue
+        stack = [s]
+        comp_id[s] = cid
+        nodes = []
+        while stack:
+            x = stack.pop()
+            nodes.append(x)
+            for y in adj[x]:
+                if comp_id[y] == -1:
+                    comp_id[y] = cid
+                    stack.append(y)
+        comp_sizes.append(len(nodes))
+        cid += 1
+
+    # Tarjan bridge-finding with subtree sizes (per component root)
+    tin = [-1] * num_nodes
+    low = [-1] * num_nodes
+    parent = [-1] * num_nodes
+    sub = [0] * num_nodes
+    timer = 0
+
+    # Map undirected edge -> severity for lookup
+    bridge_sev = {}
+
+    def dfs(u: int):
+        nonlocal timer
+        tin[u] = low[u] = timer
+        timer += 1
+        sub[u] = 1
+        for v in adj[u]:
+            if v == parent[u]:
+                continue
+            if tin[v] != -1:
+                low[u] = min(low[u], tin[v])
+            else:
+                parent[v] = u
+                dfs(v)
+                sub[u] += sub[v]
+                low[u] = min(low[u], low[v])
+
+                # Bridge condition
+                if low[v] > tin[u]:
+                    csize = comp_sizes[comp_id[u]]
+                    a = sub[v]
+                    b = csize - a
+                    sev = float(min(a, b)) / float(csize) if csize > 0 else 0.0
+                    key = (u, v) if u < v else (v, u)
+                    bridge_sev[key] = sev
+
+    for s in range(num_nodes):
+        if tin[s] == -1:
+            parent[s] = -1
+            dfs(s)
+
+    # Produce severity aligned with edge order
+    out = torch.zeros((E,), dtype=torch.float32)
+    for i, (u, v) in enumerate(edges_e2.tolist()):
+        key = (u, v) if u < v else (v, u)
+        out[i] = bridge_sev.get(key, 0.0)
+    return out

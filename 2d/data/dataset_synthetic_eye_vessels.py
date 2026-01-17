@@ -13,6 +13,7 @@ from PIL import Image
 import torchvision.transforms.functional as tvf
 from utils.utils import rotate_coordinates
 from torchvision.transforms.functional import rotate
+from utils.utils import _bridge_severity_for_edges, _to_edge_index
 from pathlib import Path
 
 
@@ -23,6 +24,35 @@ class Vessel2GraphDataLoader(Dataset):
     Args:
         Dataset ([type]): [description]
     """
+    def _get_edge_severity(self, idx, num_nodes=None, edges_e2=None):
+        if idx in self._edge_sev_cache:
+            return self._edge_sev_cache[idx]
+
+        # If caller provided nodes/edges, use them to avoid re-reading CSVs
+        if num_nodes is None or edges_e2 is None:
+            data = self.data[idx]
+            nodes_df = pd.read_csv(data['nodes'], sep=",", index_col="id")
+            edges_df = pd.read_csv(data['edges'], sep=",", index_col="id")
+            num_nodes = int(nodes_df.shape[0])
+            edges_e2 = torch.tensor(edges_df.to_numpy()[:, :2].astype(int))
+        else:
+            num_nodes = int(num_nodes)
+            edges_e2 = edges_e2.long()
+
+        edges_e2 = _to_edge_index(edges_e2)
+        sev = _bridge_severity_for_edges(num_nodes, edges_e2)
+        self._edge_sev_cache[idx] = sev
+        return sev
+
+
+    def precompute_edge_severity(self, verbose=False):
+        if verbose:
+            print(f"[Vessel2GraphDataLoader] Precomputing edge severity for {len(self)} samples...")
+        for idx in range(len(self)):
+            _ = self._get_edge_severity(idx)
+        if verbose:
+            print("[Vessel2GraphDataLoader] Done.")
+
 
     def __init__(self, data, augment, max_nodes, domain_classification=-1):
         """[summary]
@@ -36,6 +66,8 @@ class Vessel2GraphDataLoader(Dataset):
         self.max_nodes = max_nodes
 
         self.domain_classification = domain_classification
+        self._edge_sev_cache = {}
+
 
     def __len__(self):
         """[summary]
@@ -58,6 +90,10 @@ class Vessel2GraphDataLoader(Dataset):
         data = self.data[idx]
         nodes = pd.read_csv(data['nodes'], sep=",", index_col="id")
         edges = pd.read_csv(data['edges'], sep=",", index_col="id")
+        
+        edges_e2 = _to_edge_index(edges)
+        edge_sev = self._get_edge_severity(idx, num_nodes=nodes.shape[0], edges_e2=edges_e2)
+
         image_data = Image.open(data['img'])
         seg_data = Image.open(data['seg'])
 
@@ -79,7 +115,7 @@ class Vessel2GraphDataLoader(Dataset):
             seg_data = rotate(seg_data, angle)
             nodes = rotate_coordinates(nodes, angle)
 
-        return image_data-0.5, seg_data-0.5, nodes, edges, self.domain_classification
+        return image_data-0.5, seg_data-0.5, nodes, edges_e2, edge_sev, self.domain_classification
 
 
 def build_synthetic_vessel_network_data(config, mode='train', split=0.8, max_samples=0, use_grayscale=False, domain_classification=-1, mixed=False, has_val=False):

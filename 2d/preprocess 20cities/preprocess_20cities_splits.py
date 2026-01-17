@@ -550,12 +550,16 @@ def main(args):
     out_roots = {}
     for sp in ("train", "val", "test"):
         root_sp = Path(args.out_root) / sp
-        out_imgseg = root_sp / "raw"   # images (sat) and masks (gt)
-        out_vtp    = root_sp / "vtp"   # graphs
-        for d in (out_imgseg, out_vtp):
+        out_raw = root_sp / "raw"   # raw RGB patches
+        out_seg = root_sp / "seg"   # segmentation patches
+        out_vtp = root_sp / "vtp"   # graphs
+
+        for d in (out_raw, out_seg, out_vtp):
             assert d.parent.name in {"train", "val", "test"}, f"Refusing to create non-split dir: {d}"
             d.mkdir(parents=True, exist_ok=True)
-        out_roots[sp] = (out_imgseg, out_vtp)
+
+        out_roots[sp] = (out_raw, out_seg, out_vtp)
+
 
     # Pillow resample compat
     try:
@@ -581,7 +585,7 @@ def main(args):
         else:
             per_img_quota = args.patches_per_image or 5
 
-        out_imgseg, out_vtp = out_roots[sp]
+        out_raw, out_seg, out_vtp = out_roots[sp]
 
         written_sp = 0
         for si, sat_path in enumerate(tqdm(files, desc=f"Processing regions ({sp})", leave=False)):
@@ -655,12 +659,18 @@ def main(args):
                         nodes_p, edges_p, theta_straight=float(args.simplify_theta)
                     )
 
-                patch_name = f"{stem}_{pi:06d}"
-                Image.fromarray(img_p).save(out_imgseg / f"{patch_name}_sat.png")
-                seg_vis = (seg_p.astype(np.uint8) * 255) if seg_p.dtype != np.uint8 else (seg_p * 255)
-                Image.fromarray(seg_vis, mode="L").save(out_imgseg / f"{patch_name}_gt.png")
+                # Global, monotonically increasing sample id
+                sample_id = written + 1  # 1-based
+                base = f"sample_{sample_id:06d}"
 
-                graph_stem = out_vtp / f"{patch_name}_gt_graph"
+                # Save raw + seg into separate folders
+                Image.fromarray(img_p).save(out_raw / f"{base}_data.png")
+                seg_vis = (seg_p.astype(np.uint8) * 255) if seg_p.dtype != np.uint8 else (seg_p * 255)
+                Image.fromarray(seg_vis, mode="L").save(out_seg / f"{base}_seg.png")
+
+                # Graph basename
+                graph_stem = out_vtp / f"{base}_graph"
+
 
                 # Save according to chosen format
                 if args.graph_format in ("pickle", "both"):
@@ -713,7 +723,7 @@ if __name__ == "__main__":
                     help="Exact number of TEST patches to generate; overrides total_patches for this split.")
 
     args = ap.parse_args(['--root', '/data/scavone/20cities',
-                          '--out_root', '/data/scavone/20cities/patches',
+                          '--out_root', '/data/scavone/20cities/patches_mie',
                           '--split', '/data/scavone/20cities/splits.csv',
                           '--graph_format', 'both',
                           '--overlap', '0.35',

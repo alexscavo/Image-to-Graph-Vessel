@@ -20,7 +20,7 @@ from metrics.svcca import get_cca_similarity, robust_cca_similarity
 class RelationformerTrainer(SupervisedTrainer):
 
     def _iteration(self, engine, batchdata):
-        images, seg, nodes, edges, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4]
+        images, seg, nodes, edges, edge_sev, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4]
         # inputs, targets = self.get_batch(batchdata, image_keys=IMAGE_KEYS, label_keys="label")
         # inputs = torch.cat(inputs, 1)
 
@@ -28,8 +28,9 @@ class RelationformerTrainer(SupervisedTrainer):
         seg = seg.to(engine.state.device,  non_blocking=False)
         nodes = [node.to(engine.state.device,  non_blocking=False) for node in nodes]
         edges = [edge.to(engine.state.device,  non_blocking=False) for edge in edges]
+        edge_sev = [s.to(engine.state.device, non_blocking=False) for s in edge_sev]
         domains = domains.to(engine.state.device, non_blocking=False)
-        target = {'nodes': nodes, 'edges': edges, 'domains': domains}
+        target = {'nodes': nodes, 'edges': edges, "edge_sev": edge_sev, 'domains': domains}
 
         self.network[0].train()
         self.network[1].eval()
