@@ -287,7 +287,9 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
 
     elif mode == 'split':
         
-        data_root = Path(config.DATA.SOURCE_DATA_PATH)
+        if not getattr(config.DATA, "DATA_PATH", None):
+            raise ValueError("config.DATA.DATA_PATH is missing. Set it from SOURCE_DATA_PATHS before loading data.")
+        data_root = Path(config.DATA.DATA_PATH)
         target_root = Path(config.DATA.TARGET_DATA_PATH)
         
         
@@ -299,7 +301,7 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
             train_root = target_root / "train"
             
         img_folder_train = train_root / 'raw'
-        seg_folder_train = train_root / 'raw'
+        seg_folder_train = train_root / 'seg' if (train_root / 'seg').exists() else train_root / 'raw'
         vtk_folder_train = train_root / 'vtp'
 
         img_files_train = []
@@ -315,18 +317,19 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
                 continue
             
             base_name, ext = os.path.splitext(file_)
-            base_name_region = base_name[:-3]
-            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
-    
-            # Construct paths for image and segmentation files
-            img_files_train.append(str(img_folder_train / f"region_{region_number}_{patch_number}_sat.png"))
-            seg_files_train.append(str(seg_folder_train / f"{base_name}.png"))
-        
-            # Construct paths for graph files
-            vtp_path = str(vtk_folder_train / f"{base_name}_graph_gt.vtp")
-            pickle_path = str(vtk_folder_train / f"{base_name}_graph.pickle")
-            
-            vtk_files_train.append(pickle_path)    
+
+            if base_name.startswith("sample_") and base_name.endswith("_data"):
+                base_id = base_name[:-5]
+                img_files_train.append(str(img_folder_train / file_))
+                seg_files_train.append(str(seg_folder_train / f"{base_id}_seg.png"))
+                pickle_path = str(vtk_folder_train / f"{base_id}_graph.pickle")
+            else:
+                region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
+                img_files_train.append(str(img_folder_train / f"region_{region_number}_{patch_number}_sat.png"))
+                seg_files_train.append(str(seg_folder_train / f"{base_name}.png"))
+                pickle_path = str(vtk_folder_train / f"{base_name}_graph.pickle")
+
+            vtk_files_train.append(pickle_path)
                 
             i += 1
                         
@@ -352,7 +355,7 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
                 val_root = target_root / "val"
                 
             img_folder_val = val_root / 'raw'
-            seg_folder_val = val_root / 'raw'
+            seg_folder_val = val_root / 'seg' if (val_root / 'seg').exists() else val_root / 'raw'
             vtk_folder_val = val_root / 'vtp'
 
             img_files_val = []
@@ -368,18 +371,19 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
                     continue
                 
                 base_name, ext = os.path.splitext(file_)
-                base_name_region = base_name[:-3]
-                region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
-        
-                # Construct paths for image and segmentation files
-                img_files_val.append(str(img_folder_val / f"region_{region_number}_{patch_number}_sat.png"))
-                seg_files_val.append(str(seg_folder_val / f"{base_name}.png"))
-            
-                # Construct paths for graph files
-                vtp_path = str(vtk_folder_val / f"{base_name}_graph_gt.vtp")
-                pickle_path = str(vtk_folder_val / f"{base_name}_graph.pickle")
-                
-                vtk_files_val.append(pickle_path)    
+
+                if base_name.startswith("sample_") and base_name.endswith("_data"):
+                    base_id = base_name[:-5]
+                    img_files_val.append(str(img_folder_val / file_))
+                    seg_files_val.append(str(seg_folder_val / f"{base_id}_seg.png"))
+                    pickle_path = str(vtk_folder_val / f"{base_id}_graph.pickle")
+                else:
+                    region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
+                    img_files_val.append(str(img_folder_val / f"region_{region_number}_{patch_number}_sat.png"))
+                    seg_files_val.append(str(seg_folder_val / f"{base_name}.png"))
+                    pickle_path = str(vtk_folder_val / f"{base_name}_graph.pickle")
+
+                vtk_files_val.append(pickle_path)
                     
                 i += 1
                             

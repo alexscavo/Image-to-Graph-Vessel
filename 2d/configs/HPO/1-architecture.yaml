@@ -3,9 +3,14 @@ DATA:
   BATCH_SIZE: 32 #16
   TEST_BATCH_SIZE: 128 #16
   DATA_PATH: ""   # octa-synth-packed_bigger_inverted
-  SOURCE_DATA_PATH: "/data/scavone/20cities/patches" # Path to dataset, could be overwritten by command line argument
+  MIXED: False
+  MIXED_SOURCE: False
+  SOURCE_DATASET_NAME: "roads"
+  SOURCE_DATA_PATHS:
+    roads: "/data/scavone/20cities/patches"
   NUM_SOURCE_SAMPLES: -1
   NUM_TARGET_SAMPLES: 1600
+  TARGET_DATASET_NAME: "octa-real"
   TARGET_DATA_PATH: "/data/scavone/octa500/patches"
   COMPUTE_TARGET_GRAPH_LOSS: True
   TEST_DATA_PATH: "/data/scavone/octa500/patches/test"

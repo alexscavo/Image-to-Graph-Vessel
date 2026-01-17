@@ -5,9 +5,11 @@ DATA:
 
   DATA_PATH: "" # C:/Users/Utente/Desktop/tesi/cross-dim_i2g/data/octa-synth-packed
   MIXED: False
+  MIXED_SOURCE: False
 
   SOURCE_DATASET_NAME: "plants"
-  SOURCE_DATA_PATH: "/data/scavone/plants_3d2cut/patches" # Path to dataset, could be overwritten by command line argument
+  SOURCE_DATA_PATHS:
+    plants: "/data/scavone/plants_3d2cut/patches"
   NUM_SOURCE_SAMPLES: -1  # -1
 
   TARGET_DATASET_NAME: "octa-synth"

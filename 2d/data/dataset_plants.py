@@ -257,7 +257,9 @@ def build_plants_network_data(config, mode='train', split=0.95, max_samples=0, u
 
     elif mode == 'split':
         
-        data_root = Path(config.DATA.SOURCE_DATA_PATH)
+        if not getattr(config.DATA, "DATA_PATH", None):
+            raise ValueError("config.DATA.DATA_PATH is missing. Set it from SOURCE_DATA_PATHS before loading data.")
+        data_root = Path(config.DATA.DATA_PATH)
         target_root = Path(config.DATA.TARGET_DATA_PATH)
         
         # ----- TRAIN FOLDERS -----

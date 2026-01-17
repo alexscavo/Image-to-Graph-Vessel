@@ -85,6 +85,26 @@ def main(args):
     config.log.exp_name = args.exp_name
 
     config.display_prob = args.display_prob
+    if not config.DATA.MIXED:
+        source_paths_by_ds = getattr(config.DATA, "SOURCE_DATA_PATHS", None)
+        if source_paths_by_ds is None:
+            raise ValueError("config.DATA.SOURCE_DATA_PATHS is missing.")
+        if not isinstance(source_paths_by_ds, dict) and hasattr(source_paths_by_ds, "__dict__"):
+            source_paths_by_ds = vars(source_paths_by_ds)
+
+        source_name = getattr(config.DATA, "SOURCE_DATASET_NAME", None)
+        if source_name is None:
+            raise ValueError("config.DATA.SOURCE_DATASET_NAME is missing.")
+        if isinstance(source_name, (list, tuple)):
+            if len(source_name) != 1:
+                raise ValueError("config.DATA.SOURCE_DATASET_NAME must be a single name when MIXED is False.")
+            source_name = source_name[0]
+        if source_name not in source_paths_by_ds:
+            raise ValueError(
+                f"Missing path for source dataset '{source_name}' in SOURCE_DATA_PATHS. "
+                f"Available keys: {list(source_paths_by_ds.keys())}"
+            )
+        config.DATA.DATA_PATH = source_paths_by_ds[source_name]
 
     if args.cuda_visible_device:
         os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(
@@ -109,35 +129,62 @@ def main(args):
     
     if config.DATA.MIXED:
         print("Using mixed dataset")
-        build_dataset_function = partial(build_mixed_data, upsample_target_domain=config.TRAIN.UPSAMPLE_TARGET_DOMAIN)
+        build_dataset_function = partial(
+            build_mixed_data,
+            upsample_target_domain=config.TRAIN.UPSAMPLE_TARGET_DOMAIN,
+        )
+
+        # source sample budget (Option A)
+        if getattr(config.DATA, "MIXED_SOURCE", False):
+            num_source_samples_by_dataset = config.DATA.NUM_SOURCE_SAMPLES_BY_DATASET
+            if isinstance(num_source_samples_by_dataset, dict):
+                values = num_source_samples_by_dataset.values()
+            elif hasattr(num_source_samples_by_dataset, "__dict__"):
+                values = vars(num_source_samples_by_dataset).values()
+            else:
+                values = num_source_samples_by_dataset
+            max_samples = sum(int(v) for v in values)
+        else:
+            max_samples = int(config.DATA.NUM_SOURCE_SAMPLES)
+
     else:
         print("Using single dataset")
         dataset_name = config.DATA.TARGET_DATASET_NAME
-        
-        if dataset_name == 'roads':
+
+        if dataset_name == "roads":
             build_dataset_function = build_road_network_data
-            
-        elif dataset_name == 'octa-synth':
+        elif dataset_name == "octa-synth":
             build_dataset_function = build_synthetic_vessel_network_data
-            
-        elif dataset_name == 'octa-real':
+        elif dataset_name == "octa-real":
             build_dataset_function = build_real_vessel_network_data
-        
-        elif dataset_name == 'plants':
+        elif dataset_name == "plants":
             build_dataset_function = build_plants_network_data
-    
-    
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+
+        # single-dataset mode uses target sample count
+        max_samples = int(config.DATA.NUM_TARGET_SAMPLES)
+
     # check if the val set is already provided, or if we need to use the random split with 0.8
     root = Path(config.DATA.TARGET_DATA_PATH)
     val_root = root / "val"
     has_val = val_root.exists()
-    
-    print('val_root:', val_root)
-    print('has_val? ',has_val)
 
-    train_ds, val_ds, sampler = build_dataset_function(
-        config, mode='split', use_grayscale=args.pretrain_seg, max_samples=config.DATA.NUM_SOURCE_SAMPLES, split=0.8, has_val=has_val
+    print("val_root:", val_root)
+    print("has_val? ", has_val)
+
+    build_kwargs = dict(
+        config=config,
+        mode="split",
+        use_grayscale=args.pretrain_seg,
+        split=0.8,
+        has_val=has_val,
     )
+    if not config.DATA.MIXED:
+        build_kwargs["max_samples"] = max_samples
+
+    train_ds, val_ds, sampler = build_dataset_function(**build_kwargs)
+
 
     train_loader = DataLoader(train_ds,
                               batch_size=config.DATA.BATCH_SIZE,

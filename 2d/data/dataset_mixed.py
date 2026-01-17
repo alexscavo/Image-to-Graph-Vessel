@@ -22,7 +22,6 @@ TARGET_BUILDERS = {
 def build_mixed_data(config, mode, split, use_grayscale, has_val, upsample_target_domain):
     # ---- SOURCE (option A: explicit per-dataset counts) ----
     # For mixed sources, we need a per-dataset path mapping (SOURCE_DATA_PATHS).
-    # For single-source setups, SOURCE_DATA_PATH can still be used as a fallback.
 
     mixed_source = bool(config.DATA.MIXED_SOURCE)
     source_names = config.DATA.SOURCE_DATASET_NAME
@@ -36,9 +35,13 @@ def build_mixed_data(config, mode, split, use_grayscale, has_val, upsample_targe
     counts_by_ds = getattr(config.DATA, "NUM_SOURCE_SAMPLES_BY_DATASET", None)
     if counts_by_ds is None:
         raise ValueError("Option A selected but config.DATA.NUM_SOURCE_SAMPLES_BY_DATASET is missing.")
+    if not isinstance(counts_by_ds, dict) and hasattr(counts_by_ds, "__dict__"):
+        counts_by_ds = vars(counts_by_ds)
 
     source_paths_by_ds = getattr(config.DATA, "SOURCE_DATA_PATHS", None)
-    single_source_path = getattr(config.DATA, "SOURCE_DATA_PATH", None)
+    if source_paths_by_ds is not None and not isinstance(source_paths_by_ds, dict):
+        if hasattr(source_paths_by_ds, "__dict__"):
+            source_paths_by_ds = vars(source_paths_by_ds)
 
     # If MIXED_SOURCE is enabled, enforce SOURCE_DATA_PATHS so each source can point to its own root.
     if mixed_source and source_paths_by_ds is None:
@@ -53,21 +56,14 @@ def build_mixed_data(config, mode, split, use_grayscale, has_val, upsample_targe
             raise ValueError(f"Unknown source dataset '{name}'. Available: {list(SOURCE_BUILDERS.keys())}")
 
         # Set path for this source dataset
-        if source_paths_by_ds is not None:
-            if name not in source_paths_by_ds:
-                raise ValueError(
-                    f"Missing path for source dataset '{name}' in SOURCE_DATA_PATHS. "
-                    f"Available keys: {list(source_paths_by_ds.keys())}"
-                )
-            config.DATA.DATA_PATH = source_paths_by_ds[name]
-        elif single_source_path is not None:
-            # Backward-compatible fallback for non-mixed (or if you intentionally share one root)
-            config.DATA.DATA_PATH = single_source_path
-        else:
+        if source_paths_by_ds is None:
+            raise ValueError("config.DATA.SOURCE_DATA_PATHS is missing.")
+        if name not in source_paths_by_ds:
             raise ValueError(
-                "No source data path configured. Set either config.DATA.SOURCE_DATA_PATH (single) "
-                "or config.DATA.SOURCE_DATA_PATHS (per dataset)."
+                f"Missing path for source dataset '{name}' in SOURCE_DATA_PATHS. "
+                f"Available keys: {list(source_paths_by_ds.keys())}"
             )
+        config.DATA.DATA_PATH = source_paths_by_ds[name]
 
         if name not in counts_by_ds:
             raise ValueError(
