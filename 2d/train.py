@@ -317,13 +317,14 @@ def main(args):
 
     # Choose your primary metric (adjust keys to your evaluator)
     primary = (
-        metrics.get("edge_map")
-        or metrics.get("mAP_edges")
-        or metrics.get("edge_mAP")
-        or metrics.get("total")       # if your evaluator reports a composite "total"
-        or metrics.get("loss")        # as a last resort (lower is better, note sign)
+        metrics.get("val_total_loss")
+        or metrics.get("val_smd")
+        or metrics.get("val_cka_similarity")
+        or metrics.get("val_cca_similarity")
+        or metrics.get("val_edge_loss")
         or float("nan")
     )
+
 
     # Tensor/array-safe conversion
     if hasattr(primary, "item"):
@@ -397,17 +398,17 @@ if __name__ == '__main__':
     ########################################    
     
     # --- PRE-TRAINING --- 
-    args = parser.parse_args(['--exp_name', 'pretraining_mixed_plant_synth',
-                              '--config', '2d/configs/pretrain_plants_octa_synth.yaml',
-                             ])
+    # args = parser.parse_args(['--exp_name', 'pretraining_mixed_plant_synth',
+    #                           '--config', '2d/configs/pretrain_plants_octa_synth.yaml',
+    #                          ])
     
     
     # --- FINE TUNING ---
-    # args = parser.parse_args(['--exp_name', 'finetuning_mixed_synth_short',
-    #                         '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
-    #                         '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_synth1_10/models/checkpoint_epoch=50.pt',
-    #                         '--no_strict_loading'
-    #                         ])
+    args = parser.parse_args(['--exp_name', 'finetuning_mixed_plant_synth',
+                            '--config', '/home/scavone/cross-dim_i2g/2d/configs/config_2d_synth.yaml',
+                            '--resume', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/pretraining_mixed_plant_synth_10/models/checkpoint_epoch=50.pt',
+                            '--no_strict_loading'
+                            ])
 
     import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy('file_system')

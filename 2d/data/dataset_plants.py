@@ -237,7 +237,7 @@ def build_plants_network_data(config, mode='train', split=0.95, max_samples=0, u
             seg_files.append(str(seg_folder_train / f"{file_name}_seg.png"))
 
             # Check for both .graph and .pickle files
-            graph_files.append(str(graph_folder_train / f"{file_name}_gt_graph.json")) 
+            graph_files.append(str(graph_folder_train / f"{file_name}_gt_graph.vtp")) 
             
 
         data_dicts = [

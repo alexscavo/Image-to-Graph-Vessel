@@ -152,8 +152,8 @@ def build_evaluator(val_loader, net, loss, optimizer, scheduler, writer, config,
             save_key_metric=True,
             key_metric_name="val_total_loss",        # <- must exist in evaluator.state.metrics
             key_metric_n_saved=1,
-            key_metric_negative_sign=True,  # maximize metric
-            key_metric_greater_or_equal=True,
+            key_metric_negative_sign=True,  # minimize metric
+            key_metric_greater_or_equal=False,
             file_prefix="best",
         ),
     ]
