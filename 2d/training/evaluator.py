@@ -86,19 +86,25 @@ class RelationformerEvaluator(SupervisedEvaluator):
         nodes = [node.to(engine.state.device,  non_blocking=False) for node in nodes]
         edges = [edge.to(engine.state.device,  non_blocking=False) for edge in edges]
         domains = domains.to(engine.state.device, non_blocking=False)
-        target = {'nodes': nodes, 'edges': edges}
 
         self.network.eval()
         
-        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images, seg=False, domain_labels=domains)
+        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains, conc_features_flat, domain_hs = self.network(images, seg=False, domain_labels=domains, alpha=0.0)
+
+        target = {
+            "nodes": [node.detach() for node in nodes],
+            "edges": [edge.detach() for edge in edges],
+            "domains": domains,
+            "interpolated_domains": interpolated_domains,
+        }
 
         with torch.no_grad():
             losses = self.loss_function(
-                h.clone().detach(),
-                {'pred_logits': out['pred_logits'].clone().detach(), 'pred_nodes': out["pred_nodes"].clone().detach()},
-                {'nodes': [node.clone().detach() for node in nodes], 'edges': [edge.clone().detach() for edge in edges], 'domains': domains, "interpolated_domains": interpolated_domains},
+                h.detach(),
+                {"pred_logits": out["pred_logits"].detach(), "pred_nodes": out["pred_nodes"].detach()},
+                target,
                 pred_backbone_domains,
-                pred_instance_domains
+                pred_instance_domains,
             )
 
         pred_nodes, pred_edges = relation_infer(

@@ -93,12 +93,9 @@ class RelationFormer(nn.Module):
         # CNN backbone
         features, pos = self.encoder(samples)
 
-        # Create 
         srcs = []
         masks = []
-        # For each different input feature level (l=level)
         for l, feat in enumerate(features):
-            # Get the feature itself and the corresponding mask
             src, mask = feat.decompose()
             srcs.append(self.input_proj[l](src))
             masks.append(mask)
@@ -117,73 +114,75 @@ class RelationFormer(nn.Module):
                 srcs.append(src)
                 masks.append(mask)
                 pos.append(pos_l)
-                
-        # DEBUG
-        # print("srcs[0] shape:", srcs[0].shape)
 
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
-            
+
+        # --- NEW: initialize these so we can always return them ---
+        conc_features_flat = None  # tensor you will take grad wrt for backbone DA
+        domain_hs = None           # tensor you will take grad wrt for instance DA
+
         if self.config.DATA.MIXED:
             domain_features = []
             replicated_domain_labels = []
-            # We have list of 2d features from each feature level where every level has the shape (batch_size, channels, height, width)
-            # We want to create a tensor where each position in each feature map is viewed as own sample such that each feature level is (batch_size*height*width, channels) and the domain labels are (batch_size*height*width, 1)
-            # This new tensor should be organized in a way such that all feature positions from one sample are grouped together
-            # For example, if we have 2 samples in a batch and 2 feature levels, the tensor should look like this:  
-            # [sample1_level1, sample1_level2, sample2_level1, sample2_level2]
+
             for feature in srcs[1:]:
-                # For one feature level, put channel dimension last and flatten the tensor
-                flat_feature = feature.clone().permute(0,2,3,1)
-                # With this operation we get a tensor of shape (batch_size, height*width, channels)
-                flat_feature = torch.flatten(flat_feature.clone(), start_dim=1, end_dim=2)
+                # (B, C, H, W) -> (B, H, W, C) -> (B, H*W, C)
+                flat_feature = feature.permute(0, 2, 3, 1)
+                flat_feature = torch.flatten(flat_feature, start_dim=1, end_dim=2)
                 domain_features.append(flat_feature)
-                # Create domain labels by getting a multiplication factor and then replicating each labels from domain_labels to match the number of samples in the feature level to get a tensor of shape (batch_size, height*width)
+
                 domain_label = domain_labels.unsqueeze(1).repeat_interleave(feature.shape[2] * feature.shape[3], dim=1)
                 replicated_domain_labels.append(domain_label)
 
-            # Now we merge the list of tensors (shape: (batch_size, height*width, channels)) to one tensor (shape: (batch_size*height*width, channels) such that all feature positions from one sample are grouped together
+            # (B, sum(HW), C) and (B, sum(HW))
             conc_features = torch.cat(domain_features, dim=1)
             conc_labels = torch.cat(replicated_domain_labels, dim=1)
-            backbone_domain_classifications = self.backbone_domain_discriminator(torch.flatten(conc_features.clone(), end_dim=1), alpha)
-            
-        else: 
-            backbone_domain_classifications = torch.tensor(-1)
+
+            # --- NEW: this is the shared representation tensor for gradient norms ---
+            # shape: (B*sum(HW), C)
+            conc_features_flat = torch.flatten(conc_features, end_dim=1)
+
+            # same as before, but no clone()
+            backbone_domain_classifications = self.backbone_domain_discriminator(conc_features_flat, alpha)
+        else:
+            backbone_domain_classifications = torch.tensor(-1, device=srcs[0].device)
             conc_labels = None
-    
-        hs, init_reference, inter_references, _, _ = self.decoder(
-            srcs, masks, query_embeds, pos
-        )
 
-        object_token = hs[...,:self.obj_token,:]
+        hs, init_reference, inter_references, _, _ = self.decoder(srcs, masks, query_embeds, pos)
 
+        object_token = hs[..., :self.obj_token, :]
         class_prob = self.class_embed(object_token)
+
+        # bbox head (your debug block kept intact)
+        pre = self.bbox_embed(object_token)
+        post = pre.sigmoid()
         
-        # DEBUG START
-        # coord_loc = self.bbox_embed(object_token).sigmoid()         # !!!!!!!!!!!!!!!!! scommentare
-        pre = self.bbox_embed(object_token)          # BEFORE sigmoid
-        post = pre.sigmoid()                         # AFTER sigmoid
-        if random.random() < 0.02:  # ~10% chance
-            print("\npre min/max:", pre.min().item(), pre.max().item())
-            print("post min/max:", post.min().item(), post.max().item())
-            q = torch.quantile(pre.flatten(), torch.tensor([0.01,0.5,0.99], device=pre.device))
-            sat_lo = (post < 0.01).float().mean().item()
-            sat_hi = (post > 0.99).float().mean().item()
-            print(f"pre q1/med/q99=({q[0]:.2f},{q[1]:.2f},{q[2]:.2f}), "
-                f"post sat low={sat_lo:.2f}, high={sat_hi:.2f}")
         coord_loc = post
-        #DEBUG END
 
         if self.config.DATA.MIXED:
-            # Flatten the tensor but keep batch dimension
-            domain_hs = torch.flatten(hs.clone(), start_dim=1)
+            # --- NEW: shared representation tensor for gradient norms ---
+            # keep batch dimension; this is exactly what you feed to the instance discriminator
+            domain_hs = torch.flatten(hs, start_dim=1)
+
+            # same as before, but no clone()
             instance_domain_classifications = self.instance_domain_discriminator(domain_hs, alpha)
         else:
-            instance_domain_classifications = torch.tensor(-1)
-        
+            instance_domain_classifications = torch.tensor(-1, device=srcs[0].device)
+
         out = {'pred_logits': class_prob, 'pred_nodes': coord_loc}
-        return hs, out, srcs, backbone_domain_classifications, instance_domain_classifications, conc_labels
+
+        # --- NEW: return the feature tensors for gradient-based alpha ---
+        return (
+            hs, out, srcs,
+            backbone_domain_classifications,
+            instance_domain_classifications,
+            conc_labels,
+            conc_features_flat, # input to backbone domain discriminator
+            domain_hs           # input to instance domain discriminator
+        )
+
 
 
 class MLP(nn.Module):
