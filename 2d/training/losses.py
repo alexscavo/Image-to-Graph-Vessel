@@ -89,7 +89,6 @@ class SetCriterion(nn.Module):
         self.edge_sampling_mode = edge_sampling_mode
         self.sample_ratio = config.TRAIN.EDGE_SAMPLE_RATIO
         self.sample_ratio_interval = config.TRAIN.EDGE_SAMPLE_RATIO_INTERVAL
-        self.exclude_target_seg = getattr(config.TRAIN, "EXCLUDE_TARGET_SEG", True)
         if config.DATA.MIXED:
             self.domain_img_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.IMAGE_ADVERSARIAL else None
             self.domain_inst_loss = nn.NLLLoss(domain_class_weight) if config.TRAIN.GRAPH_ADVERSARIAL else None
@@ -107,8 +106,7 @@ class SetCriterion(nn.Module):
                             'cards':config.TRAIN.W_CARD,
                             'nodes':config.TRAIN.W_NODE,
                             'edges':config.TRAIN.W_EDGE,
-                            'domain':config.TRAIN.W_DOMAIN,
-                            'seg': config.TRAIN.W_SEG
+                            'domain':config.TRAIN.W_DOMAIN
                             }
         
         # --- Hard negative mining scheduling (defaults) ---
@@ -548,45 +546,6 @@ class SetCriterion(nn.Module):
 
         return domain_loss
 
-    def loss_seg(self, pred_seg, target_seg, eps=1e-6):
-        """
-        pred_seg: [B, Cseg, H, W] (logits)
-        target_seg:
-        - binary: [B, 1, H, W] or [B, H, W] with {0,1}
-        - multiclass: [B, H, W] with {0..Cseg-1}
-        """
-        if pred_seg is None or pred_seg.numel() == 0:
-            return torch.tensor(0.0, device=target_seg.device)
-
-        target_seg = target_seg.to(pred_seg.device)
-
-        # binary case (Cseg == 1): BCEWithLogits
-        if pred_seg.shape[1] == 1:
-            if target_seg.dim() == 3:
-                target_seg = target_seg.unsqueeze(1)
-            target_seg = target_seg.float()
-
-            # compute pos_weight per batch
-            pos = target_seg.sum()
-            neg = target_seg.numel() - pos
-            pos_weight = (neg / (pos + eps)).clamp(1.0, 50.0)  # clamp to avoid crazy weights
-
-            return F.binary_cross_entropy_with_logits(
-                pred_seg, target_seg,
-                pos_weight=pos_weight
-            )
-
-        # multiclass case (Cseg > 1): CrossEntropy
-        else:
-            # target must be [B,H,W] long
-            if target_seg.dim() == 4 and target_seg.shape[1] == 1:
-                target_seg = target_seg[:, 0, ...]
-            target_seg = target_seg.long()
-            return F.cross_entropy(pred_seg, target_seg)
-    
-    
-    
-    
     
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -601,10 +560,7 @@ class SetCriterion(nn.Module):
         return batch_idx, tgt_idx
 
     def forward(self, h, out, target, pred_backbone_domains, pred_instance_domains):
-        """
-        Loss computation.
-        Segmentation loss is applied ONLY on source-domain samples (domain == 0).
-        """
+        """Loss computation."""
 
         device = h.device if hasattr(h, "device") else h.get_device()
 
@@ -636,7 +592,6 @@ class SetCriterion(nn.Module):
                 'edges': z,
                 'cards': z,
                 'domain': z,
-                'seg': z,
             }
 
         # -------------------------------------------------
@@ -663,30 +618,6 @@ class SetCriterion(nn.Module):
             )
         else:
             losses['domain'] = torch.tensor(0.0, device=device)
-
-        # -------------------------------------------------
-        # SEGMENTATION LOSS (SOURCE ONLY)
-        # -------------------------------------------------
-        # -------------------------------------------------
-        # SEGMENTATION LOSS
-        # -------------------------------------------------
-        pred_seg = out.get('pred_seg', None)
-        gt_seg   = target.get('seg', None)
-
-        if pred_seg is None or gt_seg is None:
-            losses['seg'] = torch.tensor(0.0, device=device)
-        else:
-            # If exclude_target_seg is enabled, compute seg loss only on original source samples
-            if self.exclude_target_seg:
-                # If we already filtered the batch (compute_target_graph_loss == False),
-                # then everything left is source and keep is all-True (see above).
-                if keep.any():
-                    losses['seg'] = self.loss_seg(pred_seg[keep], gt_seg[keep])
-                else:
-                    losses['seg'] = torch.tensor(0.0, device=device)
-            else:
-                # Use all segmentations (source + target)
-                losses['seg'] = self.loss_seg(pred_seg, gt_seg)
 
         # -------------------------------------------------
         # TOTAL

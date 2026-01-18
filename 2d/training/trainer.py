@@ -75,6 +75,13 @@ class RelationformerTrainer(SupervisedTrainer):
             print("epoch", engine.state.epoch,
                 "iteration", engine.state.iteration,
                 "epoch_length", engine.state.epoch_length)
+            if hasattr(self.loss_function, "_get_scheduled_hard_fraction"):
+                try:
+                    hard_frac = float(self.loss_function._get_scheduled_hard_fraction())
+                    hnm_mode = getattr(self.loss_function, "hnm_mode", None)
+                    print("hnm_mode", hnm_mode, "hard_frac", hard_frac)
+                except Exception:
+                    print("hnm_mode", None, "hard_frac", None)
             
         
         alpha_used = float(self.alpha_current)
