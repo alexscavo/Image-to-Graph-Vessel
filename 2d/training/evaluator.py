@@ -89,7 +89,7 @@ class RelationformerEvaluator(SupervisedEvaluator):
 
         self.network.eval()
         
-        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains, conc_features_flat, domain_hs = self.network(images, seg=False, domain_labels=domains, alpha=0.0)
+        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network(images, seg=False, domain_labels=domains, alpha=0.0)
 
         target = {
             "nodes": [node.detach() for node in nodes],

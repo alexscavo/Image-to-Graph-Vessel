@@ -119,18 +119,14 @@ class RelationFormer(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
 
-        # --- NEW: initialize these so we can always return them ---
-        conc_features_flat = None  # tensor you will take grad wrt for backbone DA
-        domain_hs = None           # tensor you will take grad wrt for instance DA
-
         if self.config.DATA.MIXED:
             domain_features = []
             replicated_domain_labels = []
 
             for feature in srcs[1:]:
                 # (B, C, H, W) -> (B, H, W, C) -> (B, H*W, C)
-                flat_feature = feature.permute(0, 2, 3, 1)
-                flat_feature = torch.flatten(flat_feature, start_dim=1, end_dim=2)
+                flat_feature = feature.clone().permute(0, 2, 3, 1)
+                flat_feature = torch.flatten(flat_feature.clone(), start_dim=1, end_dim=2)
                 domain_features.append(flat_feature)
 
                 domain_label = domain_labels.unsqueeze(1).repeat_interleave(feature.shape[2] * feature.shape[3], dim=1)
@@ -140,12 +136,10 @@ class RelationFormer(nn.Module):
             conc_features = torch.cat(domain_features, dim=1)
             conc_labels = torch.cat(replicated_domain_labels, dim=1)
 
-            # --- NEW: this is the shared representation tensor for gradient norms ---
-            # shape: (B*sum(HW), C)
-            conc_features_flat = torch.flatten(conc_features, end_dim=1)
-
-            # same as before, but no clone()
-            backbone_domain_classifications = self.backbone_domain_discriminator(conc_features_flat, alpha)
+            backbone_domain_classifications = self.backbone_domain_discriminator(
+                torch.flatten(conc_features.clone(), end_dim=1),
+                alpha
+            )
         else:
             backbone_domain_classifications = torch.tensor(-1, device=srcs[0].device)
             conc_labels = None
@@ -162,12 +156,10 @@ class RelationFormer(nn.Module):
         coord_loc = self.bbox_embed(object_token).sigmoid()
 
         if self.config.DATA.MIXED:
-            # --- NEW: shared representation tensor for gradient norms ---
-            # keep batch dimension; this is exactly what you feed to the instance discriminator
-            domain_hs = torch.flatten(hs, start_dim=1)
-
-            # same as before, but no clone()
-            instance_domain_classifications = self.instance_domain_discriminator(domain_hs, alpha)
+            instance_domain_classifications = self.instance_domain_discriminator(
+                torch.flatten(hs, start_dim=1),
+                alpha
+            )
         else:
             instance_domain_classifications = torch.tensor(-1, device=srcs[0].device)
 
@@ -178,9 +170,7 @@ class RelationFormer(nn.Module):
             hs, out, srcs,
             backbone_domain_classifications,
             instance_domain_classifications,
-            conc_labels,
-            conc_features_flat, # input to backbone domain discriminator
-            domain_hs           # input to instance domain discriminator
+            conc_labels
         )
 
 

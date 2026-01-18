@@ -86,7 +86,7 @@ class RelationformerTrainer(SupervisedTrainer):
         
         alpha_used = float(self.alpha_current)
 
-        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains, conc_features_flat, domain_hs = self.network[0](images, seg=False, alpha=alpha_used, domain_labels=domains)
+        h, out, srcs, pred_backbone_domains, pred_instance_domains, interpolated_domains = self.network[0](images, seg=False, alpha=alpha_used, domain_labels=domains)
         target["interpolated_domains"] = interpolated_domains
         
         # ---- predictions for visualization ----
@@ -161,12 +161,8 @@ class RelationformerTrainer(SupervisedTrainer):
             and (engine.state.iteration >= self.alpha_warmup_iters)
             and (engine.state.iteration % self.alpha_update_every == 0)
         ):
-            grad_targets = []
-            if conc_features_flat is not None:
-                grad_targets.append(conc_features_flat)
-            if domain_hs is not None:
-                grad_targets.append(domain_hs)
-
+            # Use shared activations so both L_task and L_DA contribute.
+            grad_targets = [h]
             if len(grad_targets) > 0:
                 g_task_list = torch.autograd.grad(
                     L_task, grad_targets, retain_graph=True, allow_unused=True
@@ -188,8 +184,9 @@ class RelationformerTrainer(SupervisedTrainer):
                 g_da_measured = summed_norm(g_da_list, device)
 
                 # IMPORTANT: DA grads are already scaled by GRL alpha_used.
-                # Estimate "base" DA norm by dividing out alpha_used.
-                g_da_base = g_da_measured / (abs(alpha_used) + self.alpha_eps)
+                # Avoid zero-lock by flooring the denominator.
+                alpha_used_safe = max(abs(alpha_used), 1e-2)
+                g_da_base = g_da_measured / alpha_used_safe
 
                 alpha_new = (g_task / (g_da_base + self.alpha_eps)).item()
 
@@ -205,6 +202,17 @@ class RelationformerTrainer(SupervisedTrainer):
                     self.alpha_ema_beta * self.alpha_current +
                     (1.0 - self.alpha_ema_beta) * alpha_new
                 )
+
+        if engine.state.iteration % 200 == 0:
+            print(
+                "alpha_debug",
+                "iter", engine.state.iteration,
+                "alpha_used", float(alpha_used),
+                "alpha_new", float(alpha_new_logged),
+                "alpha_current", float(self.alpha_current),
+                "grad_task", float(g_task_logged),
+                "grad_da_base", float(g_da_base_logged),
+            )
 
 
         losses['total'].backward()
