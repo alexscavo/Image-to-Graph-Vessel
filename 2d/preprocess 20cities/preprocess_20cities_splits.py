@@ -550,12 +550,16 @@ def main(args):
     out_roots = {}
     for sp in ("train", "val", "test"):
         root_sp = Path(args.out_root) / sp
-        out_imgseg = root_sp / "raw"   # images (sat) and masks (gt)
-        out_vtp    = root_sp / "vtp"   # graphs
-        for d in (out_imgseg, out_vtp):
-            assert d.parent.name in {"train", "val", "test"}, f"Refusing to create non-split dir: {d}"
+        out_raw = root_sp / "raw"
+        out_seg = root_sp / "seg"
+        out_vtp = root_sp / "vtp"
+
+        for d in (out_raw, out_seg, out_vtp):
+            assert d.parent.name in {"train", "val", "test"}
             d.mkdir(parents=True, exist_ok=True)
-        out_roots[sp] = (out_imgseg, out_vtp)
+
+        out_roots[sp] = (out_raw, out_seg, out_vtp)
+
 
     # Pillow resample compat
     try:
@@ -567,6 +571,8 @@ def main(args):
 
     written = 0
     pbar = tqdm(total=grand_total if grand_total else None, desc="Patches", leave=True)
+
+    global_idx = {"train": 0, "val": 0, "test": 0}
 
     for sp in ("train", "val", "test"):
         files = buckets[sp]
@@ -581,7 +587,7 @@ def main(args):
         else:
             per_img_quota = args.patches_per_image or 5
 
-        out_imgseg, out_vtp = out_roots[sp]
+        out_raw, out_seg, out_vtp = out_roots[sp]
 
         written_sp = 0
         for si, sat_path in enumerate(tqdm(files, desc=f"Processing regions ({sp})", leave=False)):
@@ -655,19 +661,39 @@ def main(args):
                         nodes_p, edges_p, theta_straight=float(args.simplify_theta)
                     )
 
-                patch_name = f"{stem}_{pi:06d}"
-                Image.fromarray(img_p).save(out_imgseg / f"{patch_name}_sat.png")
-                seg_vis = (seg_p.astype(np.uint8) * 255) if seg_p.dtype != np.uint8 else (seg_p * 255)
-                Image.fromarray(seg_vis, mode="L").save(out_imgseg / f"{patch_name}_gt.png")
+                global_idx[sp] += 1
+                idx = global_idx[sp]
 
-                graph_stem = out_vtp / f"{patch_name}_gt_graph"
+                base = f"sample_{idx:06d}"
+
+                # raw image
+                Image.fromarray(img_p).save(
+                    out_raw / f"{base}_data.png"
+                )
+
+                # segmentation
+                seg_vis = (seg_p.astype(np.uint8) * 255)
+                Image.fromarray(seg_vis, mode="L").save(
+                    out_seg / f"{base}_seg.png"
+                )
+
+                # graph
+                graph_base = out_vtp / f"{base}_graph"
+
 
                 # Save according to chosen format
                 if args.graph_format in ("pickle", "both"):
-                    save_patch_graph(nodes_p, edges_p, args.patch_size, graph_stem.with_suffix(".pickle"))
+                    save_patch_graph(
+                        nodes_p, edges_p, args.patch_size,
+                        graph_base.with_suffix(".pickle")
+                    )
 
                 if args.graph_format in ("vtp", "both"):
-                    save_patch_graph_vtp(nodes_p, edges_p, args.patch_size, graph_stem.with_suffix(".vtp"))
+                    save_patch_graph_vtp(
+                        nodes_p, edges_p, args.patch_size,
+                        graph_base.with_suffix(".vtp")
+                    )
+
 
 
                 written += 1
@@ -712,9 +738,9 @@ if __name__ == "__main__":
     ap.add_argument("--num_test", type=int, default=None,
                     help="Exact number of TEST patches to generate; overrides total_patches for this split.")
 
-    args = ap.parse_args(['--root', '/data/scavone/20cities',
-                          '--out_root', '/data/scavone/20cities/patches',
-                          '--split', '/data/scavone/20cities/splits.csv',
+    args = ap.parse_args(['--root', 'C:/Users/Utente/Desktop/tesi/datasets/20cities',
+                          '--out_root', 'C:/Users/Utente/Desktop/tesi/datasets/20cities/patches',
+                          '--split', 'C:/Users/Utente/Desktop/tesi/datasets/20cities/splits.csv',
                           '--graph_format', 'both',
                           '--overlap', '0.35',
                           '--num_train', '99200',

@@ -159,7 +159,7 @@ class RelationFormer(nn.Module):
         pre = self.bbox_embed(object_token)
         post = pre.sigmoid()
         
-        coord_loc = post
+        coord_loc = self.bbox_embed(object_token).sigmoid()
 
         if self.config.DATA.MIXED:
             # --- NEW: shared representation tensor for gradient norms ---

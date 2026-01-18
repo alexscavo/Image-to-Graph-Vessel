@@ -104,7 +104,7 @@ class SetCriterion(nn.Module):
         self.hnm_ramp_epochs = int(getattr(config.TRAIN, "HNM_RAMP_EPOCHS", 10))  # ramp over first N epochs
         self.hnm_warmup_epochs = int(getattr(config.TRAIN, "HNM_WARMUP_EPOCHS", 0))
         self.hnm_pool_mult = getattr(config.TRAIN, "HNM_POOL_MULT", 2)
-        self.hnm_mode = getattr(config.TRAIN, "HNM_MODE", "top_tk")  # or top_p_uniform or weighted
+        self.hnm_mode = getattr(config.TRAIN, "HNM_MODE", "top_k")  # or top_p_uniform or weighted
         self.hnm_top_p = float(getattr(config.TRAIN, "HNM_TOP_P", 0.3))      # for top_p_uniform
         self.hnm_temp = float(getattr(config.TRAIN, "HNM_TEMP", 0.5))        # for weighted (temperature)
 
@@ -204,7 +204,7 @@ class SetCriterion(nn.Module):
         cand_edges = neg_edges[cand_idx]
         
         # random shuffling for undirected edges
-        shuffle = torch.rand((cand_edges.sie(0),), device=device) > 0.5
+        shuffle = torch.rand((cand_edges.size(0),), device=device) > 0.5
         cand_edges[shuffle] = cand_edges[shuffle][:, [1, 0]]
         
         # now we need to build relation_features for EMA scoring (matches loss_edges construction)

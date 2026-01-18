@@ -19,6 +19,7 @@ from monai.engines import SupervisedTrainer
 from monai.handlers import LrScheduleHandler, ValidationHandler, StatsHandler, TensorBoardStatsHandler, CheckpointSaver, MeanDice
 import torch
 import gc
+import csv
 from metrics.similarity import SimilarityMetricPCA, SimilarityMetricTSNE, batch_cka, batch_cosine, batch_euclidean, downsample_examples, upsample_examples
 from metrics.svcca import get_cca_similarity, robust_cca_similarity
 import numpy as np
@@ -66,6 +67,7 @@ class RelationformerTrainer(SupervisedTrainer):
         optim_set_to_none: bool = False,
         seg: bool = False,
         alpha_coeff: float = 0.1,
+        ema_relation = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -94,6 +96,7 @@ class RelationformerTrainer(SupervisedTrainer):
         self.config = kwargs.pop('config')
         self.seg = seg
         self.alpha_coeff = alpha_coeff
+        self.ema_relation = ema_relation
 
     def _iteration(self, engine, batchdata):
         images, segs, nodes, edges, z_pos, domains = batchdata[0], batchdata[1], batchdata[2], batchdata[3], batchdata[4], batchdata[5]
@@ -110,51 +113,20 @@ class RelationformerTrainer(SupervisedTrainer):
         self.network.train()
         self.optimizer.zero_grad()
 
+        # engine.state.epoch and engine.state.iteration exist in Ignite/Monai
         epoch = engine.state.epoch
         iteration = engine.state.iteration
+        epoch_len = engine.state.epoch_length  # Monai sets this
+        max_epochs = engine.state.max_epochs
+
+        if hasattr(self.loss_function, "set_hnm_progress"):
+            self.loss_function.set_hnm_progress(epoch, iteration, epoch_len, max_epochs)
         
         if engine.state.iteration % engine.state.epoch_length == 1:
             print("epoch", engine.state.epoch,
                 "iteration", engine.state.iteration,
                 "epoch_length", engine.state.epoch_length)
             
-
-        # --- PROVARE
-        # global_iter = engine.state.iteration - 1  # 0-based global step
-        # epoch_len = engine.state.epoch_length
-        # total_iters = engine.state.max_epochs * epoch_len
-
-        # warm_epochs = getattr(self.config.TRAIN, "ALPHA_WARMUP_EPOCHS", 0)
-        # alpha_max = getattr(self.config.TRAIN, "ALPHA_MAX", self.alpha_coeff)
-
-        # warm_iters = warm_epochs * epoch_len
-
-        # if global_iter < warm_iters:
-        #     alpha = 0.0
-        # else:
-        #     # progress only over the post-warmup part
-        #     p = (global_iter - warm_iters) / float(max(total_iters - warm_iters, 1))
-        #     alpha = (2. / (1. + np.exp(-10 * p)) - 1) * alpha_max
-
-        # SCOMMENTARE -- ORIGINALE
-        # p = float(iteration + epoch * engine.state.epoch_length) / engine.state.max_epochs / engine.state.epoch_length
-        # alpha = (2. / (1. + np.exp(-10 * p)) - 1) * self.alpha_coeff
-        # FINO A QUI
-        
-        # DEBUG!!!
-        # trainer.py, inside _iteration method
-        # epoch = engine.state.epoch
-        # iteration = engine.state.iteration
-        # epoch_len = engine.state.epoch_length
-        # max_epochs = engine.state.max_epochs
-
-        # # Diagnostic print before calculation
-        # if iteration % 10 == 0:  # Print every 10 iterations to avoid flooding
-        #     print(f"\n--- Alpha Debug ---")
-        #     print(f"Current Epoch: {epoch}")
-        #     print(f"Global Iteration: {iteration}")
-        #     print(f"Epoch Length: {epoch_len}")
-        #     print(f"Max Epochs: {max_epochs}")
         
         total_iterations = engine.state.max_epochs * engine.state.epoch_length
         p = float(engine.state.iteration) / total_iterations
@@ -355,6 +327,12 @@ class RelationformerTrainer(SupervisedTrainer):
 
         losses['total'].backward()        
         self.optimizer.step()
+        
+        if self.ema_relation is not None:
+            # Update from the *actual* student relation head.
+            # self.network might be DDP-wrapped, so unwrap if needed.
+            student_net = self.network.module if hasattr(self.network, "module") else self.network
+            self.ema_relation.update(student_net.relation_embed)
 
         del images
         del segs
@@ -369,7 +347,7 @@ class RelationformerTrainer(SupervisedTrainer):
 
 
 def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
-                  evaluator, config, device, fp16=False, seg=False):
+                  evaluator, config, device, fp16=False, seg=False, ema_relation=None):
     """[summary]
 
     Args:
@@ -385,6 +363,17 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
     Returns:
         [type]: [description]
     """
+    
+    save_dict = {
+        "net": net,
+        "optimizer": optimizer,
+        "scheduler": scheduler,
+    }
+
+    if ema_relation is not None:
+        save_dict["ema_relation"] = ema_relation.ema
+
+    
     train_handlers = [
         LrScheduleHandler(
             lr_scheduler=scheduler,
@@ -403,7 +392,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         CheckpointSaver(
             save_dir=os.path.join(config.TRAIN.SAVE_PATH, "runs", '%s_%d' % (config.log.exp_name, config.DATA.SEED),
                                   './models'),
-            save_dict={"net": net, "optimizer": optimizer, "scheduler": scheduler},
+            save_dict=save_dict,
             save_interval=5,
             n_saved=2,
             epoch_level=True,
@@ -487,11 +476,13 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         key_train_metric=None
         additional_metrics=None
 
+    epoch_len = getattr(config.TRAIN, "EPOCH_LENGTH", None)  # e.g. 5000
 
     trainer = RelationformerTrainer(
         config= config,
         device=device,
         max_epochs=config.TRAIN.EPOCHS,
+        epoch_length=epoch_len,
         train_data_loader=train_loader,
         network=net,
         optimizer=optimizer,
@@ -509,6 +500,7 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
         key_train_metric=key_train_metric,
         additional_metrics=additional_metrics,
         alpha_coeff=config.TRAIN.ALPHA_COEFF,
+        ema_relation=ema_relation,
         amp=fp16,   # uses operations with 16 bits precision for most operations, but for critical ones still 32 bits
     )
 
@@ -533,6 +525,102 @@ def build_trainer(train_loader, net, loss, optimizer, scheduler, writer,
     )
     
     trainer.add_event_handler(Events.EPOCH_STARTED, lambda eng: trainer.viz3d.start_epoch())
+    
+    ##### HNM_PROOF_LOGGING_START #####
+    
+    def _quantile_stats(x: torch.Tensor, topk: int = 200, max_n: int = 200000):
+        """
+        Compute quantiles on a capped random subsample to avoid huge tensors.
+        Uses torch.quantile directly (no sort).
+        """
+        if x is None or x.numel() == 0:
+            return None
+
+        x = x.detach().float().cpu().flatten()
+
+        # cap size to avoid quantile() tensor-too-large and to keep logging cheap
+        if x.numel() > max_n:
+            idx = torch.randperm(x.numel())[:max_n]
+            x = x[idx]
+
+        # quantiles (no sorting needed)
+        p50 = torch.quantile(x, 0.50).item()
+        p90 = torch.quantile(x, 0.90).item()
+        p99 = torch.quantile(x, 0.99).item()
+
+        # top-k mean: use topk (no full sort)
+        k = min(int(topk), x.numel())
+        topk_mean = torch.topk(x, k, largest=True).values.mean().item()
+
+        frac_05 = (x > 0.5).float().mean().item()
+        frac_07 = (x > 0.7).float().mean().item()
+
+        return dict(p50=p50, p90=p90, p99=p99, topk_mean=topk_mean, frac_05=frac_05, frac_07=frac_07, n=int(x.numel()))
+
+    proof_csv = os.path.join(config.TRAIN.SAVE_PATH, "runs", f"{config.log.exp_name}_{config.DATA.SEED}", "hnm_proof_stats.csv")
+
+    def _log_hnm_proof(engine):
+        # loss is the SetCriterion object passed into build_trainer
+        if not hasattr(loss, "dbg_pop_epoch"):
+            return
+        pack = loss.dbg_pop_epoch()
+        if pack is None:
+            return
+
+        neg_all = pack["neg_scores"]
+        neg_samp = pack["sampled_neg_scores"]
+
+        s_all = _quantile_stats(neg_all)
+        s_samp = _quantile_stats(neg_samp)
+        if s_all is None or s_samp is None:
+            return
+
+        epoch = int(engine.state.epoch)
+
+        # TensorBoard
+        writer.add_scalar("HNM_PROOF/neg_all_p50", s_all["p50"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_all_p90", s_all["p90"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_all_p99", s_all["p99"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_all_topk_mean", s_all["topk_mean"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_all_frac_gt_0p5", s_all["frac_05"], epoch)
+
+        writer.add_scalar("HNM_PROOF/neg_samp_p50", s_samp["p50"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_samp_p90", s_samp["p90"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_samp_p99", s_samp["p99"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_samp_topk_mean", s_samp["topk_mean"], epoch)
+        writer.add_scalar("HNM_PROOF/neg_samp_frac_gt_0p5", s_samp["frac_05"], epoch)
+
+        # CSV
+        write_header = not os.path.exists(proof_csv)
+        with open(proof_csv, "a", newline="") as f:
+            fieldnames = [
+                "epoch",
+                "all_n","all_p50","all_p90","all_p99","all_topk_mean","all_frac_gt_0p5","all_frac_gt_0p7",
+                "samp_n","samp_p50","samp_p90","samp_p99","samp_topk_mean","samp_frac_gt_0p5","samp_frac_gt_0p7",
+            ]
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                w.writeheader()
+            w.writerow({
+                "epoch": epoch,
+                "all_n": s_all["n"], "all_p50": s_all["p50"], "all_p90": s_all["p90"], "all_p99": s_all["p99"],
+                "all_topk_mean": s_all["topk_mean"], "all_frac_gt_0p5": s_all["frac_05"], "all_frac_gt_0p7": s_all["frac_07"],
+                "samp_n": s_samp["n"], "samp_p50": s_samp["p50"], "samp_p90": s_samp["p90"], "samp_p99": s_samp["p99"],
+                "samp_topk_mean": s_samp["topk_mean"], "samp_frac_gt_0p5": s_samp["frac_05"], "samp_frac_gt_0p7": s_samp["frac_07"],
+            })
+
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, _log_hnm_proof)
+    ##### HNM_PROOF_LOGGING_END #####
+    
+    ##### HNM_PROOF_RESET_START #####
+    def _reset_hnm_proof(engine):
+        if hasattr(loss, "_dbg_reset_epoch"):
+            loss._dbg_reset_epoch()
+
+    trainer.add_event_handler(Events.EPOCH_STARTED, _reset_hnm_proof)
+    ##### HNM_PROOF_RESET_END #####
+
+
     
     # trainer.open3d_tb = Open3DTensorboardLogger(
     #     writer=writer,

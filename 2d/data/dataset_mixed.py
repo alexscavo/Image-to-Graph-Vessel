@@ -40,11 +40,16 @@ def build_mixed_data(config, mode='split', split=0.95, upsample_target_domain=Tr
     train_ds = ConcatDataset([source_train_data, target_train_data])
     val_ds = ConcatDataset([source_val_data, target_val_data])
 
+    print('-'*50)
+    print('train set:', len(train_ds))
+    print('validation set source:', len(source_val_data), '+ validation set target:', len(target_val_data), '=', len(val_ds))
+    print('-'*50)
 
     print(f"samples A: {num_samples_A}")
     print(f"samples B: {num_samples_B}")
     print(f"weight sum a: {torch.sum(weights_A)}")
     print(f"weight sum B: {torch.sum(weights_B)}")
+    print('-'*50)
 
     if upsample_target_domain:
         print("upsampling")

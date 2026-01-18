@@ -126,6 +126,7 @@ def bn_calibrate_on_loader(net, loader, device, use_seg: bool, num_batches: int 
         domains = domains.to(device, non_blocking=False)
 
         x = segs.float() if use_seg else images
+
         net(x, z_pos, domain_labels=domains)
 
         n += 1
@@ -448,8 +449,8 @@ def main(args):
     # --- Build train/val/test vessel datasets ---
     # Assumes your build_vessel_data supports these modes.
     if config.DATA.DATASET == "road_dataset":
-        train_ds, val_ds, _  = build_road_network_data(config, mode="split",  debug=False, max_samples=args.max_samples_test)
-        test_ds  = build_road_network_data(config, mode="test",  debug=False, max_samples=args.max_samples_test)
+        train_ds, val_ds, _  = build_road_network_data(config, mode="split",  debug=False, max_samples=args.max_samples_test, gaussian_augment=True, rotate=True, continuous=True)
+        test_ds  = build_road_network_data(config, mode="test",  debug=False, max_samples=args.max_samples_test, gaussian_augment=True, rotate=True, continuous=True)
     
     else:
         if args.mixed:
@@ -465,6 +466,7 @@ def main(args):
     train_loader = build_loader(train_ds, config, shuffle=True)
     val_loader   = build_loader(val_ds,   config, shuffle=False)
     test_loader  = build_loader(test_ds,  config, shuffle=False)
+    
 
     print(f"train/val/test sizes: {len(train_ds)} / {len(val_ds)} / {len(test_ds)}")
 

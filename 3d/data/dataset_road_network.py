@@ -293,7 +293,7 @@ def build_road_network_data(config, mode='train', split=0.95, debug=False, gauss
         ]
         
         # ---- VAL FOLDERS ----
-        val_root = data_root / "train"
+        val_root = data_root / "val"
         
         img_folder_val = val_root / "raw"
         seg_folder_val = val_root / "seg"
