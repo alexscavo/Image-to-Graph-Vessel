@@ -372,9 +372,9 @@ def test(args):
 
 
 if __name__ == '__main__':
-    args = parser.parse_args(['--exp_name', 'test_finetuning_mixed_plant_synth',
+    args = parser.parse_args(['--exp_name', 'test_finetuning_mixed_roads_plant_synth',
                               '--config', '2d/configs/test_mixed_synth.yaml',
-                              '--checkpoint', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_plant_synth_10/models/checkpoint_epoch=100.pt',
+                              '--checkpoint', '/data/scavone/cross-dim_i2g_2d/trained_weights/runs/finetuning_mixed_roads_plant_synth_10/models/checkpoint_epoch=100.pt',
                               '--no_strict_loading',
                               '--out_path', '/data/scavone/cross-dim_i2g_2d/test_results'])
     test(args)
