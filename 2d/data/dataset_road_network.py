@@ -79,9 +79,9 @@ class Sat2GraphDataLoader(Dataset):
         if data['vtp'].endswith('.vtp'):
             vtk_data = pyvista.read(data['vtp'])
             nodes = torch.tensor(np.float32(np.asarray(vtk_data.points)), dtype=torch.float)[:, :2]
-            lines = torch.tensor(np.asarray(vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)
+            lines = torch.tensor(np.asarray(vtk_data.lines.reshape(-1, 3)), dtype=torch.int64)[:, 1:]
         elif data["vtp"].endswith(".pickle"):
-            nodes_xy, edges_ix, _ = load_graph_pickle_generic(data["vtp"])  
+            nodes_xy, edges_ix, _ = load_graph_pickle_generic(data["vtp"])  # <— your working function
 
             # If your pickles store (y,x), swap once here:
             # nodes_xy = nodes_xy[:, [1, 0]]
@@ -92,6 +92,8 @@ class Sat2GraphDataLoader(Dataset):
             lines = torch.from_numpy(edges_ix.astype(np.int64))
             if lines.ndim == 1:
                 lines = lines.view(-1, 2)
+
+        nodes = nodes[:, [1, 0]]
         
         # Load segmentation data
         raw_seg_data = Image.open(data['seg'])
@@ -161,17 +163,22 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
         seg_files = []
         
         
-
         for file_ in os.listdir(img_folder):
-            
-            
-            file_ = file_[:-8]
-            img_files.append(os.path.join(img_folder, file_ + 'data.png'))
-            seg_files.append(os.path.join(seg_folder, file_ + 'seg.png'))
+            if not file_.endswith(".png"):
+                continue
 
-            # Check for both .vtp and .pickle files
-            vtp_path = os.path.join(vtk_folder, file_ + 'graph.vtp')
-            pickle_path = os.path.join(vtk_folder, file_ + 'graph.pickle')
+            base_name, _ = os.path.splitext(file_)
+            if base_name.endswith("_data"):
+                stem = base_name[:-5]
+            else:
+                stem = base_name
+
+            img_files.append(os.path.join(img_folder, f"{stem}_data.png"))
+            seg_files.append(os.path.join(seg_folder, f"{stem}_seg.png"))
+
+            # Prefer .vtp if present, otherwise .pickle
+            vtp_path = os.path.join(vtk_folder, f"{stem}_graph.vtp")
+            pickle_path = os.path.join(vtk_folder, f"{stem}_graph.pickle")
             if os.path.exists(vtp_path):
                 vtk_files.append(vtp_path)
             elif os.path.exists(pickle_path):
@@ -193,7 +200,7 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
 
     elif mode == 'test':
         img_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
-        seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'raw')
+        seg_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'seg')
         vtk_folder = os.path.join(config.DATA.TEST_DATA_PATH, 'vtp')
 
         img_files = []
@@ -201,27 +208,25 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
         seg_files = []
 
         for file_ in os.listdir(img_folder):
-            
-            if "rgb" in file_ or "sat" in file_:
+            if not file_.endswith(".png"):
                 continue
-            
-            base_name, ext = os.path.splitext(file_)
-            base_name_region = base_name[:-3]
-            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
-            
-            img_files.append(os.path.join(img_folder, 'region_' + region_number + '_' + patch_number +'_sat.png'))
-            seg_files.append(os.path.join(seg_folder, base_name + '.png'))
 
-            # Check for both .vtp and .pickle files
-            vtp_path = os.path.join(vtk_folder, '_graph_gt.vtp')
-            pickle_path = os.path.join(vtk_folder, 'region_' + region_number + '_' + patch_number + '_gt_graph.pickle')
-            
-            # if os.path.exists(vtp_path):
-            #     vtk_files.append(vtp_path)
-            # elif os.path.exists(pickle_path):
-            #     vtk_files.append(pickle_path)
+            base_name, _ = os.path.splitext(file_)
+            if base_name.endswith("_data"):
+                stem = base_name[:-5]
+            else:
+                stem = base_name
 
-            vtk_files.append(pickle_path)
+            img_files.append(os.path.join(img_folder, f"{stem}_data.png"))
+            seg_files.append(os.path.join(seg_folder, f"{stem}_seg.png"))
+
+            # Prefer .vtp if present, otherwise .pickle
+            vtp_path = os.path.join(vtk_folder, f"{stem}_graph.vtp")
+            pickle_path = os.path.join(vtk_folder, f"{stem}_graph.pickle")
+            if os.path.exists(vtp_path):
+                vtk_files.append(vtp_path)
+            elif os.path.exists(pickle_path):
+                vtk_files.append(pickle_path)
 
 
         data_dicts = [
@@ -253,7 +258,7 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
             train_root = target_root / "train"
             
         img_folder_train = train_root / 'raw'
-        seg_folder_train = train_root / 'raw'
+        seg_folder_train = train_root / 'seg'
         vtk_folder_train = train_root / 'vtp'
 
         img_files_train = []
@@ -263,24 +268,26 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
         i = 0
 
         for file_ in os.listdir(img_folder_train):
-            # print('------------------------', file_, '-----------', file_.split('.'))
-            
-            if "rgb" in file_ or "sat" in file_:
+            if not file_.endswith(".png"):
                 continue
-            
-            base_name, ext = os.path.splitext(file_)
-            base_name_region = base_name[:-3]
-            region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
-    
+
+            base_name, _ = os.path.splitext(file_)
+            if base_name.endswith("_data"):
+                stem = base_name[:-5]
+            else:
+                stem = base_name
+
             # Construct paths for image and segmentation files
-            img_files_train.append(str(img_folder_train / f"region_{region_number}_{patch_number}_sat.png"))
-            seg_files_train.append(str(seg_folder_train / f"{base_name}.png"))
-        
-            # Construct paths for graph files
-            vtp_path = str(vtk_folder_train / f"{base_name}_graph_gt.vtp")
-            pickle_path = str(vtk_folder_train / f"{base_name}_graph.pickle")
-            
-            vtk_files_train.append(pickle_path)    
+            img_files_train.append(str(img_folder_train / f"{stem}_data.png"))
+            seg_files_train.append(str(seg_folder_train / f"{stem}_seg.png"))
+
+            # Prefer .vtp if present, otherwise .pickle
+            vtp_path = str(vtk_folder_train / f"{stem}_graph.vtp")
+            pickle_path = str(vtk_folder_train / f"{stem}_graph.pickle")
+            if os.path.exists(vtp_path):
+                vtk_files_train.append(vtp_path)
+            elif os.path.exists(pickle_path):
+                vtk_files_train.append(pickle_path)
                 
             i += 1
                         
@@ -306,7 +313,7 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
                 val_root = target_root / "val"
                 
             img_folder_val = val_root / 'raw'
-            seg_folder_val = val_root / 'raw'
+            seg_folder_val = val_root / 'seg'
             vtk_folder_val = val_root / 'vtp'
 
             img_files_val = []
@@ -316,24 +323,26 @@ def build_road_network_data(config, mode='train', split=0.95, max_samples=0, use
             i = 0
 
             for file_ in os.listdir(img_folder_val):
-                # print('------------------------', file_, '-----------', file_.split('.'))
-                
-                if "rgb" in file_ or "sat" in file_:
+                if not file_.endswith(".png"):
                     continue
-                
-                base_name, ext = os.path.splitext(file_)
-                base_name_region = base_name[:-3]
-                region_number, patch_number = base_name.split('_')[1], base_name.split('_')[2]
-        
+
+                base_name, _ = os.path.splitext(file_)
+                if base_name.endswith("_data"):
+                    stem = base_name[:-5]
+                else:
+                    stem = base_name
+
                 # Construct paths for image and segmentation files
-                img_files_val.append(str(img_folder_val / f"region_{region_number}_{patch_number}_sat.png"))
-                seg_files_val.append(str(seg_folder_val / f"{base_name}.png"))
-            
-                # Construct paths for graph files
-                vtp_path = str(vtk_folder_val / f"{base_name}_graph_gt.vtp")
-                pickle_path = str(vtk_folder_val / f"{base_name}_graph.pickle")
-                
-                vtk_files_val.append(pickle_path)    
+                img_files_val.append(str(img_folder_val / f"{stem}_data.png"))
+                seg_files_val.append(str(seg_folder_val / f"{stem}_seg.png"))
+
+                # Prefer .vtp if present, otherwise .pickle
+                vtp_path = str(vtk_folder_val / f"{stem}_graph.vtp")
+                pickle_path = str(vtk_folder_val / f"{stem}_graph.pickle")
+                if os.path.exists(vtp_path):
+                    vtk_files_val.append(vtp_path)
+                elif os.path.exists(pickle_path):
+                    vtk_files_val.append(pickle_path)
                     
                 i += 1
                             
